@@ -26,8 +26,8 @@ mod reexport_dataset_modules {
 }
 #[cfg(feature = "dataset")]
 pub use reexport_dataset_modules::*;
-#[cfg(any(cargo_c, feature = "capi"))]
-mod capi;
+// The upstream `capi` module is not vendored here (it required the embedded
+// stock model); the C ABI for this build lives in the `weya_nc` crate instead.
 #[cfg(feature = "tract")]
 pub mod tract;
 #[cfg(all(feature = "wav-utils", not(feature = "dataset")))]

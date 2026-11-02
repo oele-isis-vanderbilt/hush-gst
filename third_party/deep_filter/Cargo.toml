@@ -13,23 +13,14 @@ rust-version = "1.60"
 name = "df"
 path = "src/lib.rs"
 
-[[bin]]
-name = "sample-hdf5"
-path = "src/bin/sample-hdf5.rs"
-required-features = ["dataset", "bin"]
-
-[[bin]]
-name = "sample-dataset"
-path = "src/bin/sample-dataset.rs"
-required-features = ["dataset", "bin"]
-
-[[bin]]
-name = "deep-filter"
-path = "src/bin/enhance_wav.rs"
-required-features = ["bin", "tract", "wav-utils", "transforms"]
+# NOTE: trimmed vendored copy of deep_filter v0.5.3, used only to build the
+# weya_nc cdylib with the shared-weights patch in src/tract.rs. Upstream [[bin]]
+# targets and training-only modules (dataset/dataloader/augmentations/hdf5/capi)
+# are removed (not compiled under tract+transforms). The embedded default model
+# is removed too — the fine-tuned bundle is supplied at runtime.
 
 [features]
-default = ["default-model", "vorbis", "flac"]
+default = []
 
 transforms = ["dep:thiserror", "dep:ndarray", "dep:rubato"]
 dataset = [
@@ -77,10 +68,11 @@ tract = [
   "dep:flate2",
   "dep:tar",
 ]
-default-model = []  # Include default DFN3 model
-default-model-ll = []  # Include default DFN3 low latency model
+# The upstream `default-model` / `default-model-ll` features (which embedded the
+# stock 48 kHz DeepFilterNet3 bundle) and the `capi` feature that pulled them in
+# are removed entirely — there is no embedded model to enable. The fine-tuned
+# bundle is always supplied at runtime.
 nightly-features = []
-capi = ["tract", "default-model", "dep:ndarray"]
 hdf5-static = ["hdf5?/static"]
 
 [dependencies]
@@ -126,14 +118,8 @@ rstest = "0.17"
 env_logger = "0.10"
 log = { version = "0.4", features = ["std"] }
 
-[package.metadata.capi.header]
-name = "deep_filter"
-subdirectory = "deep_filter"
-[package.metadata.capi.pkg_config]
-name = "libdeepfilter"
-filename = "deepfilter"
-[package.metadata.capi.library]
-name = "deepfilter"
+# cargo-c (`package.metadata.capi.*`) metadata dropped along with the `capi`
+# feature — this crate is consumed only as a Rust dependency of `weya_nc`.
 
 [package.metadata.deb]
 assets = [

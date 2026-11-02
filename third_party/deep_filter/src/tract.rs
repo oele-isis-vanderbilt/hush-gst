@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 #[cfg(feature = "timings")]
 use std::time::Instant;
 
@@ -65,27 +66,10 @@ impl DfParams {
         })
     }
 }
-impl Default for DfParams {
-    #[allow(unreachable_code)]
-    fn default() -> Self {
-        #[cfg(feature = "default-model-ll")]
-        {
-            log::debug!("Loading model DeepFilterNet3_ll_onnx.tar.gz");
-            return DfParams::from_bytes(include_bytes!(
-                "../../models/DeepFilterNet3_ll_onnx.tar.gz"
-            ))
-            .expect("Could not load model config");
-        }
-        #[cfg(feature = "default-model")]
-        {
-            log::debug!("Loading model DeepFilterNet3_onnx.tar.gz");
-            DfParams::from_bytes(include_bytes!("../../models/DeepFilterNet3_onnx.tar.gz"))
-                .expect("Could not load model config")
-        }
-        #[cfg(not(feature = "default-model"))]
-        panic!("Not compiled with a default model")
-    }
-}
+// NOTE: upstream provides `impl Default for DfParams`, which `include_bytes!`d the
+// stock 48 kHz DeepFilterNet3 bundle into the binary. It is deliberately absent
+// here: this build runs only the fine-tuned 16 kHz bundle supplied at runtime, so
+// there is no default set of params and no way to construct one implicitly.
 
 #[derive(Clone)]
 pub enum ReduceMask {
@@ -149,7 +133,68 @@ impl Default for RuntimeParams {
     }
 }
 
-pub type TractModel = TypedSimpleState<TypedModel, TypedSimplePlan<TypedModel>>;
+// Per-session execution state now holds the shared plan via `Arc` (was an owned
+// plan). Each session therefore shares the read-only model weights instead of
+// copying them, while keeping its own (Rc-bearing) execution state per thread.
+pub type TractModel = TypedSimpleState<TypedModel, Arc<TypedSimplePlan<TypedModel>>>;
+
+/// Compile-time proof that the shared model plan is safe to share across threads.
+/// The concurrency crash (issue #5) came from sharing `Rc`-bearing execution
+/// state. We only ever share this plan, which must be `Send + Sync`. If this stops
+/// compiling, the shared-weights design is unsound — do not ship.
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn _check() {
+        assert_send_sync::<Arc<TypedSimplePlan<TypedModel>>>();
+    }
+};
+
+/// Immutable, thread-safe compiled model: the three network plans (encoder, ERB
+/// decoder, DF decoder) plus the parsed config. Built once per model load and
+/// shared across all sessions via `Arc`. Holds no per-stream mutable state and no
+/// `Rc`, so it is safe to read concurrently from many threads.
+#[derive(Clone)]
+pub struct DfModelShared {
+    enc: Arc<TypedSimplePlan<TypedModel>>,
+    erb_dec: Arc<TypedSimplePlan<TypedModel>>,
+    df_dec: Arc<TypedSimplePlan<TypedModel>>,
+    config: Ini,
+    pub n_ch: usize,
+}
+
+impl DfModelShared {
+    /// Parse a model bundle and build the three runnable plans exactly once.
+    /// `reduce_mask` is baked into the ERB decoder plan (as in `DfTract::new`).
+    pub fn new(dfp: DfParams, n_ch: usize, reduce_mask: ReduceMask) -> Result<Self> {
+        let config = dfp.config.clone();
+        let model_cfg = config.section(Some("deepfilternet")).unwrap();
+        let df_cfg = config.section(Some("df")).unwrap();
+        let enc = Arc::new(
+            init_encoder_from_read(&mut Cursor::new(dfp.enc), df_cfg, n_ch)?.into_runnable()?,
+        );
+        let erb_dec = Arc::new(
+            init_erb_decoder_from_read(
+                &mut Cursor::new(dfp.erb_dec),
+                model_cfg,
+                df_cfg,
+                n_ch,
+                Some(reduce_mask),
+            )?
+            .into_runnable()?,
+        );
+        let df_dec = Arc::new(
+            init_df_decoder_from_read(&mut Cursor::new(dfp.df_dec), model_cfg, df_cfg, n_ch)?
+                .into_runnable()?,
+        );
+        Ok(Self {
+            enc,
+            erb_dec,
+            df_dec,
+            config,
+            n_ch,
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct DfTract {
@@ -184,37 +229,35 @@ pub struct DfTract {
     rolling_spec_buf_x: VecDeque<Tensor>, // Noisy spec buf
 }
 
-#[cfg(all(not(feature = "capi"), feature = "default-model"))]
-impl Default for DfTract {
-    fn default() -> Self {
-        let r_params = RuntimeParams::new(1, false, 100., -10., 30., 20., ReduceMask::MEAN);
-        let df_params = DfParams::default();
-        DfTract::new(df_params, &r_params).expect("Could not load DfTract")
-    }
-}
+// `impl Default for DfTract` is likewise absent: it existed only to build a runtime
+// from the embedded stock model. Use `DfTract::new` / `DfTract::from_shared` with an
+// explicitly loaded bundle.
 
 impl DfTract {
     pub fn new(dfp: DfParams, rp: &RuntimeParams) -> Result<Self> {
+        // Build the shared (immutable) model, then a per-session runtime from it.
+        let shared = DfModelShared::new(dfp, rp.n_ch, rp.reduce_mask.clone())?;
+        Self::from_shared(&shared, rp)
+    }
+
+    /// Build a per-session runtime from an already-built shared model.
+    ///
+    /// Each call creates its OWN execution state (`SimpleState`) but shares the
+    /// read-only model plans via `Arc::clone` — so sessions share the weights
+    /// (one copy in memory) yet never share mutable `Rc` state across threads.
+    /// This is the memory-efficient, thread-safe path used to spawn sessions.
+    pub fn from_shared(shared: &DfModelShared, rp: &RuntimeParams) -> Result<Self> {
         #[cfg(feature = "timings")]
         let t0 = Instant::now();
-        let config = dfp.config;
+        let config = &shared.config;
         let model_cfg = config.section(Some("deepfilternet")).unwrap();
         let df_cfg = config.section(Some("df")).unwrap();
         let ch = rp.n_ch;
 
-        let enc = init_encoder_from_read(&mut Cursor::new(dfp.enc), df_cfg, ch)?;
-        let erb_dec = init_erb_decoder_from_read(
-            &mut Cursor::new(dfp.erb_dec),
-            model_cfg,
-            df_cfg,
-            ch,
-            Some(rp.reduce_mask.clone()),
-        )?;
-        let df_dec =
-            init_df_decoder_from_read(&mut Cursor::new(dfp.df_dec), model_cfg, df_cfg, ch)?;
-        let enc = SimpleState::new(enc.into_runnable()?)?;
-        let erb_dec = SimpleState::new(erb_dec.into_runnable()?)?;
-        let df_dec = SimpleState::new(df_dec.into_runnable()?)?;
+        // Fresh per-session state; the heavy model plans are shared via Arc.
+        let enc = SimpleState::new(Arc::clone(&shared.enc))?;
+        let erb_dec = SimpleState::new(Arc::clone(&shared.erb_dec))?;
+        let df_dec = SimpleState::new(Arc::clone(&shared.df_dec))?;
         #[cfg(feature = "timings")]
         let t1 = Instant::now();
 
