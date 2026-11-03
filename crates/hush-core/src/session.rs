@@ -23,7 +23,9 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { atten_lim_db: 100.0 }
+        Self {
+            atten_lim_db: 100.0,
+        }
     }
 }
 
@@ -70,6 +72,14 @@ impl Session {
         self.df.sr
     }
 
+    /// How far the enhanced output lags the input, in samples: the STFT overlap
+    /// (fft_size - hop_size) plus any lookahead frames.
+    ///
+    /// This is derived from the config, not measured.
+    pub fn delay_samples(&self) -> usize {
+        self.df.fft_size - self.df.hop_size + self.df.lookahead * self.df.hop_size
+    }
+
     /// Process exactly one hop. Returns the local SNR estimate in dB.
     /// Both slices must be `hop_size()` long.
     pub fn process_frame(&mut self, input: &[f32], output: &mut [f32]) -> Result<f32, Error> {
@@ -86,8 +96,8 @@ impl Session {
                 got: output.len(),
             });
         }
-        let noisy = ArrayView2::from_shape((1, hop), input)
-            .map_err(|e| Error::Process(e.to_string()))?;
+        let noisy =
+            ArrayView2::from_shape((1, hop), input).map_err(|e| Error::Process(e.to_string()))?;
         let enhanced = ArrayViewMut2::from_shape((1, hop), output)
             .map_err(|e| Error::Process(e.to_string()))?;
         self.df
@@ -143,7 +153,9 @@ mod tests {
 
     #[test]
     fn smoke_test_with_real_model() {
-        let path = PathBuf::from(std::env::var("CARGO_WORKSPACE_DIR").unwrap()).join("models").join("advanced_dfnet16k");
+        let path = PathBuf::from(std::env::var("CARGO_WORKSPACE_DIR").unwrap())
+            .join("models")
+            .join("advanced_dfnet16k");
         let bundle = ModelBundle::from_directory(&path).unwrap();
         let mut session = Session::new(&bundle, Settings::default()).unwrap();
         let hop = session.hop_size();

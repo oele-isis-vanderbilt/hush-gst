@@ -16,7 +16,7 @@ use std::sync::Arc;
 use df::tract::{DfModelShared, DfParams, DfTract};
 use sha2::{Digest, Sha256};
 
-use crate::constants::{runtime_params, N_CH, REDUCE_MASK};
+use crate::constants::{N_CH, REDUCE_MASK, runtime_params};
 use crate::error::Error;
 use serde::{Deserialize, Serialize};
 
@@ -68,8 +68,8 @@ impl ModelBundle {
             }
         }
 
-        let params = DfParams::new(path.to_path_buf())
-            .map_err(|e| Error::Bundle(format!("{e:#}")))?;
+        let params =
+            DfParams::new(path.to_path_buf()).map_err(|e| Error::Bundle(format!("{e:#}")))?;
         let shared = DfModelShared::new(params, N_CH, REDUCE_MASK)
             .map_err(|e| Error::ModelInit(format!("{e:#}")))?;
 
@@ -92,7 +92,6 @@ impl ModelBundle {
         })
     }
 
-
     pub fn from_directory(path: &Path) -> Result<Self, Error> {
         let manifest_path = path.join("manifest.json");
         let manifest_bytes = std::fs::read(&manifest_path)?;
@@ -100,9 +99,16 @@ impl ModelBundle {
 
         let bundle_path = path.join(format!("{}.tar.gz", manifest.id));
         let exptected_sha256 = hex::decode(&manifest.sha256)
-            .map_err(|e| Error::Bundle(format!("invalid manifest sha256: {e:#}")))?;    
+            .map_err(|e| Error::Bundle(format!("invalid manifest sha256: {e:#}")))?;
 
-        Self::from_path(&bundle_path, Some(exptected_sha256.try_into().map_err(|_| Error::Bundle("invalid manifest sha256 length".to_string()))?))
+        Self::from_path(
+            &bundle_path,
+            Some(
+                exptected_sha256
+                    .try_into()
+                    .map_err(|_| Error::Bundle("invalid manifest sha256 length".to_string()))?,
+            ),
+        )
     }
 
     pub fn info(&self) -> &ModelInfo {
@@ -128,10 +134,8 @@ mod tests {
 
     /// Writes `contents` to a unique temp file and returns its path.
     fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "hush-core-test-{}-{name}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hush-core-test-{}-{name}", std::process::id()));
         std::fs::write(&path, contents).unwrap();
         path
     }

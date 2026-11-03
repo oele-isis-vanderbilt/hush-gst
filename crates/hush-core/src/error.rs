@@ -25,11 +25,8 @@ pub enum Error {
     InvalidSetting(String),
 
     #[error("invalid frame size: expected {expected}, got {got}")]
-    FrameSize {
-        expected: usize,
-        got: usize,
-    },
+    FrameSize { expected: usize, got: usize },
 
     #[error("processing error: {0}")]
-    Process(String)
+    Process(String),
 }

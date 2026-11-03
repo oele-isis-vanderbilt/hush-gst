@@ -1,7 +1,8 @@
 mod bundle;
+mod constants;
 mod error;
 mod session;
-mod constants;
+mod stream;
 
 pub use bundle::{ModelBundle, ModelInfo};
 pub use error::Error;

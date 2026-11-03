@@ -768,6 +768,7 @@ version = "0.1.0"
 dependencies = [
  "deep_filter",
  "hex",
+ "hound",
  "ndarray",
  "serde",
  "serde_json",
