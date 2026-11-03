@@ -1,0 +1,6 @@
+{
+    "id": "advanced_dfnet16k",
+    "name": "Advanced DFNet 16k",
+    "description": "Advanced DFNet model for 16kHz audio for speaker enhancement and noise suppression.",
+    "sha256": "45632ccaa82b71bb743d6caa7c78e983fe2f2790a3af7f6ec48e6ed7ba085df6"
+}

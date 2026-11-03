@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/*"
+    "crates/*",
     "third_party/deep_filter"
 ]
