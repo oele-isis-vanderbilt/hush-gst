@@ -154,7 +154,9 @@ mkdir -p "$bin_dir"
 cp "$src" "$bin_dir/hush.new"
 chmod 755 "$bin_dir/hush.new"
 mv -f "$bin_dir/hush.new" "$bin_dir/hush"
-[ "$os" = Darwin ] && xattr -d com.apple.quarantine "$bin_dir/hush" 2>/dev/null || true
+if [ "$os" = Darwin ]; then
+    xattr -d com.apple.quarantine "$bin_dir/hush" 2>/dev/null || true
+fi
 : > "$root/.hush-install"
 say "installed $bin_dir/hush"
 
@@ -183,7 +185,7 @@ if [ "$modify_path" -eq 1 ] && [ "$on_path" -eq 0 ]; then
         mkdir -p "$(dirname "$rc")"
         case "$rc" in
             *config.fish) printf 'fish_add_path "%s" %s\n' "$bin_dir" "$MARKER" >> "$rc" ;;
-            *) printf 'export PATH="%s:$PATH" %s\n' "$bin_dir" "$MARKER" >> "$rc" ;;
+            *) printf "export PATH=\"%s:\$PATH\" %s\n" "$bin_dir" "$MARKER" >> "$rc" ;;
         esac
         say "added $bin_dir to PATH in $rc"
     done

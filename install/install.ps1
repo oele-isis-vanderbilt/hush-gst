@@ -38,7 +38,7 @@ function Say([string]$msg) { Write-Host "hush-install: $msg" }
 function Fail([string]$msg) { throw "hush-install: error: $msg" }
 
 function Get-UserPath { [Environment]::GetEnvironmentVariable('Path', 'User') }
-function Set-UserPath([string]$value) { [Environment]::SetEnvironmentVariable('Path', $value, 'User') }
+function Save-UserPath([string]$value) { [Environment]::SetEnvironmentVariable('Path', $value, 'User') }
 function Split-PathList([string]$p) { if ($p) { $p -split ';' | Where-Object { $_ } } else { @() } }
 
 if ($Uninstall) {
@@ -46,14 +46,14 @@ if ($Uninstall) {
         if (-not (Test-Path (Join-Path $Dir '.hush-install'))) {
             Fail "$Dir was not created by this installer; not removing it"
         }
-        Remove-Item -Recurse -Force $Dir
+        Remove-Item -Recurse -Force -LiteralPath $Dir
         Say "removed $Dir"
     } else {
         Say "$Dir does not exist"
     }
     $entries = Split-PathList (Get-UserPath)
     if ($entries -contains $BinDir) {
-        Set-UserPath (($entries | Where-Object { $_ -ne $BinDir }) -join ';')
+        Save-UserPath (($entries | Where-Object { $_ -ne $BinDir }) -join ';')
         Say "removed $BinDir from the user PATH"
     }
     return
@@ -80,7 +80,7 @@ if ($env:HUSH_DOWNLOAD_BASE) {
 function Fetch([string]$name, [string]$dest) {
     $src = "$base/$name"
     if (Test-Path -LiteralPath $base -PathType Container) {
-        Copy-Item -LiteralPath (Join-Path $base $name) $dest
+        Copy-Item -LiteralPath (Join-Path $base $name) -Destination $dest
     } else {
         try { Invoke-WebRequest -UseBasicParsing -Uri $src -OutFile $dest }
         catch { Fail "download failed: $src ($($_.Exception.Message))" }
@@ -108,11 +108,11 @@ try {
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $exe = Join-Path $BinDir 'hush.exe'
-    Copy-Item -Force $src.FullName $exe
+    Copy-Item -Force -LiteralPath $src.FullName -Destination $exe
     New-Item -ItemType File -Force -Path (Join-Path $Dir '.hush-install') | Out-Null
     Say "installed $exe"
 } finally {
-    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
 }
 
 # --- ffmpeg sidecar -----------------------------------------------------------
@@ -135,7 +135,7 @@ if (-not $NoFfmpeg) {
 $entries = Split-PathList (Get-UserPath)
 $onUserPath = $entries -contains $BinDir
 if (-not $NoModifyPath -and -not $onUserPath) {
-    Set-UserPath ((@($entries) + $BinDir) -join ';')
+    Save-UserPath ((@($entries) + $BinDir) -join ';')
     Say "added $BinDir to the user PATH"
 }
 if (-not ((Split-PathList $env:Path) -contains $BinDir)) {
