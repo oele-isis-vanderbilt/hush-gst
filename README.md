@@ -77,11 +77,16 @@ this order: `--ffmpeg <path>` / `HUSH_FFMPEG`, the installed sidecar, then your
   and install hush with `--no-ffmpeg`.
 - See which one is used: `hush ffmpeg path`.
 
-> **Status:** the FFmpeg download sources in
-> [`crates/hush-cli/src/ffmpeg/sources.toml`](crates/hush-cli/src/ffmpeg/sources.toml)
-> are not pinned yet. Until they are, `hush ffmpeg install` stops with a
-> message, the installer continues without FFmpeg, and hush uses the FFmpeg on
-> your `PATH`.
+`hush ffmpeg install` downloads FFmpeg 9.0.2 (about 130 MB unpacked) from fixed-version
+URLs and checks each file's SHA-256 before using it:
+
+| Platform | Source | License |
+|---|---|---|
+| macOS (arm64, x86_64) | [martin-riedl.de](https://ffmpeg.martin-riedl.de) static builds | GPL-3.0 |
+| Linux (x86_64, arm64), Windows (x64) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), LGPL variant | LGPL-2.1 |
+
+The pins live in
+[`crates/hush-cli/src/ffmpeg/sources.toml`](crates/hush-cli/src/ffmpeg/sources.toml).
 
 ### Manual install
 
@@ -186,6 +191,6 @@ The end-to-end tests in `crates/hush-cli/tests/` need `ffmpeg` and `ffprobe` on
 - **Model** (`models/advanced_dfnet16k`): from the
   [Hush](https://github.com/pulp-vision/Hush) project; see its license terms.
 - **FFmpeg** is not part of this repository. `hush ffmpeg install` downloads a
-  separate FFmpeg build (LGPL builds where available); its source and license
-  are recorded in `NOTICE.txt` in the FFmpeg directory. hush runs FFmpeg as a
-  separate program and does not link to it.
+  separate FFmpeg build (LGPL on Linux and Windows, GPL on macOS, see above);
+  its source and license are recorded in `NOTICE.txt` in the FFmpeg directory.
+  hush runs FFmpeg as a separate program and does not link to it.

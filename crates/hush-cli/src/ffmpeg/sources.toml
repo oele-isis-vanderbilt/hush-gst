@@ -8,64 +8,70 @@
 # Rules:
 # - Pin a fixed-version URL, never a "latest" link, and update url and sha256
 #   together (`shasum -a 256 <file>`).
-# - Prefer LGPL builds (BtbN "lgpl" variants for Linux and Windows).
+# - Prefer LGPL builds (BtbN "lgpl" variants for Linux and Windows). There is
+#   no maintained LGPL static macOS build, so macOS uses martin-riedl.de (GPL).
+#   hush only runs FFmpeg as a separate program and never links to it.
+# - BtbN deletes daily builds after a few weeks but keeps month-end builds
+#   (autobuild-YYYY-MM-<last day>) for about two years: pin a month-end tag.
 # - The build must include the encoders hush uses: aac, flac, alac, libmp3lame,
 #   libopus, libvorbis (`hush doctor` checks this).
 #
 # An empty url means "not pinned yet": `hush ffmpeg install` then explains how
 # to use a system ffmpeg instead.
+#
+# Current pins: FFmpeg 9.0.2 on every platform, pinned 2026-11-04.
 
 [[target]]
 key = "macos-aarch64"
-license = "see NOTICE.txt"
+license = "GPL-3.0-or-later (martin-riedl.de static build)"
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip"
+sha256 = "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924"
 archive = "zip"
 extract = ["ffmpeg"]
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip"
+sha256 = "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
 archive = "zip"
 extract = ["ffprobe"]
 
 [[target]]
 key = "macos-x86_64"
-license = "see NOTICE.txt"
+license = "GPL-3.0-or-later (martin-riedl.de static build)"
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip"
+sha256 = "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4"
 archive = "zip"
 extract = ["ffmpeg"]
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffprobe.zip"
+sha256 = "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd"
 archive = "zip"
 extract = ["ffprobe"]
 
 [[target]]
 key = "linux-x86_64"
-license = "LGPL-2.1-or-later"
+license = "LGPL-2.1-or-later (BtbN FFmpeg-Builds)"
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-lgpl-9.0.tar.xz"
+sha256 = "6046d6731b26f58887e953561551d254a6eec9fbca4100dfeab56e19af8328d5"
 archive = "tar.xz"
 extract = ["ffmpeg", "ffprobe", "LICENSE.txt"]
 
 [[target]]
 key = "linux-aarch64"
-license = "LGPL-2.1-or-later"
+license = "LGPL-2.1-or-later (BtbN FFmpeg-Builds)"
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linuxarm64-lgpl-9.0.tar.xz"
+sha256 = "3d1f66827a73ce5a446312bc4924234dc1515726d3743e2df35c0177e1f82128"
 archive = "tar.xz"
 extract = ["ffmpeg", "ffprobe", "LICENSE.txt"]
 
 [[target]]
 key = "windows-x86_64"
-license = "LGPL-2.1-or-later"
+license = "LGPL-2.1-or-later (BtbN FFmpeg-Builds)"
 [[target.download]]
-url = ""
-sha256 = ""
+url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-lgpl-9.0.zip"
+sha256 = "9d37c564e0d01c18cde184a079fa6ef04d7d2783ada41da81d04165cc8f1a650"
 archive = "zip"
 extract = ["ffmpeg.exe", "ffprobe.exe", "LICENSE.txt"]
