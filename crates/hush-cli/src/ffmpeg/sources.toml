@@ -1,0 +1,71 @@
+# Pinned FFmpeg builds for `hush ffmpeg install`.
+#
+# One [[target]] per platform, keyed by "<os>-<arch>" (Rust's
+# std::env::consts::OS and ARCH). Each target lists one or more downloads;
+# `extract` names the files taken from each archive (matched by file name,
+# anywhere inside the archive).
+#
+# Rules:
+# - Pin a fixed-version URL, never a "latest" link, and update url and sha256
+#   together (`shasum -a 256 <file>`).
+# - Prefer LGPL builds (BtbN "lgpl" variants for Linux and Windows).
+# - The build must include the encoders hush uses: aac, flac, alac, libmp3lame,
+#   libopus, libvorbis (`hush doctor` checks this).
+#
+# An empty url means "not pinned yet": `hush ffmpeg install` then explains how
+# to use a system ffmpeg instead.
+
+[[target]]
+key = "macos-aarch64"
+license = "see NOTICE.txt"
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "zip"
+extract = ["ffmpeg"]
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "zip"
+extract = ["ffprobe"]
+
+[[target]]
+key = "macos-x86_64"
+license = "see NOTICE.txt"
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "zip"
+extract = ["ffmpeg"]
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "zip"
+extract = ["ffprobe"]
+
+[[target]]
+key = "linux-x86_64"
+license = "LGPL-2.1-or-later"
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "tar.xz"
+extract = ["ffmpeg", "ffprobe", "LICENSE.txt"]
+
+[[target]]
+key = "linux-aarch64"
+license = "LGPL-2.1-or-later"
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "tar.xz"
+extract = ["ffmpeg", "ffprobe", "LICENSE.txt"]
+
+[[target]]
+key = "windows-x86_64"
+license = "LGPL-2.1-or-later"
+[[target.download]]
+url = ""
+sha256 = ""
+archive = "zip"
+extract = ["ffmpeg.exe", "ffprobe.exe", "LICENSE.txt"]

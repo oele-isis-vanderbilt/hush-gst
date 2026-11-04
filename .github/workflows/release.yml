@@ -1,0 +1,80 @@
+# Tag vX.Y.Z -> build hush for each platform -> GitHub Release with archives,
+# .sha256 files and both installers. The installers download from
+# releases/latest/download/, so the newest release is what users get.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin,      os: macos-14 }
+          - { target: x86_64-apple-darwin,       os: macos-14 }   # cross-compiled
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-22.04 }  # older glibc = wider support
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: x86_64-pc-windows-msvc,    os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked -p hush-cli --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name=hush-${{ matrix.target }}
+          mkdir -p dist/$name
+          cp target/${{ matrix.target }}/release/hush README.md dist/$name/
+          tar -czf dist/$name.tar.gz -C dist $name
+          (cd dist && shasum -a 256 $name.tar.gz > $name.tar.gz.sha256)
+          rm -rf dist/$name
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "hush-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/hush.exe", README.md "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          $h = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
+          Set-Content -NoNewline -Path "dist/$name.zip.sha256" -Value "$h  $name.zip"
+          Remove-Item -Recurse "dist/$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hush-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cp install/install.sh install/install.ps1 dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

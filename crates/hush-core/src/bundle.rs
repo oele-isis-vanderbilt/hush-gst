@@ -58,18 +58,24 @@ impl ModelBundle {
     /// hash must match.
     pub fn from_path(path: &Path, expected_sha256: Option<[u8; 32]>) -> Result<Self, Error> {
         let bytes = std::fs::read(path)?;
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        if let Some(expected) = expected_sha256 {
-            if expected != sha256 {
-                return Err(Error::HashMismatch {
-                    expected: hex(&expected),
-                    actual: hex(&sha256),
-                });
-            }
-        }
-
+        let sha256 = check_hash(&bytes, expected_sha256)?;
         let params =
             DfParams::new(path.to_path_buf()).map_err(|e| Error::Bundle(format!("{e:#}")))?;
+        Self::build(params, sha256, bytes.len() as u64)
+    }
+
+    /// Load a model bundle (tar.gz) from memory, e.g. one embedded with
+    /// `include_bytes!`. Hashes and parses the same buffer.
+    pub fn from_static_bytes(
+        bytes: &'static [u8],
+        expected_sha256: Option<[u8; 32]>,
+    ) -> Result<Self, Error> {
+        let sha256 = check_hash(bytes, expected_sha256)?;
+        let params = DfParams::from_bytes(bytes).map_err(|e| Error::Bundle(format!("{e:#}")))?;
+        Self::build(params, sha256, bytes.len() as u64)
+    }
+
+    fn build(params: DfParams, sha256: [u8; 32], size_bytes: u64) -> Result<Self, Error> {
         let shared = DfModelShared::new(params, N_CH, REDUCE_MASK)
             .map_err(|e| Error::ModelInit(format!("{e:#}")))?;
 
@@ -83,7 +89,7 @@ impl ModelBundle {
             hop_size: probe.hop_size,
             fft_size: probe.fft_size,
             lookahead: probe.lookahead,
-            size_bytes: bytes.len() as u64,
+            size_bytes,
         };
 
         Ok(Self {
@@ -98,17 +104,7 @@ impl ModelBundle {
         let manifest: ModelManifest = serde_json::from_slice(&manifest_bytes)?;
 
         let bundle_path = path.join(format!("{}.tar.gz", manifest.id));
-        let exptected_sha256 = hex::decode(&manifest.sha256)
-            .map_err(|e| Error::Bundle(format!("invalid manifest sha256: {e:#}")))?;
-
-        Self::from_path(
-            &bundle_path,
-            Some(
-                exptected_sha256
-                    .try_into()
-                    .map_err(|_| Error::Bundle("invalid manifest sha256 length".to_string()))?,
-            ),
-        )
+        Self::from_path(&bundle_path, Some(parse_sha256(&manifest.sha256)?))
     }
 
     pub fn info(&self) -> &ModelInfo {
@@ -119,6 +115,27 @@ impl ModelBundle {
     pub(crate) fn shared(&self) -> &Arc<DfModelShared> {
         &self.shared
     }
+}
+
+fn check_hash(bytes: &[u8], expected: Option<[u8; 32]>) -> Result<[u8; 32], Error> {
+    let sha256: [u8; 32] = Sha256::digest(bytes).into();
+    if let Some(expected) = expected
+        && expected != sha256
+    {
+        return Err(Error::HashMismatch {
+            expected: hex(&expected),
+            actual: hex(&sha256),
+        });
+    }
+    Ok(sha256)
+}
+
+/// Decode a hex SHA-256 string (as stored in manifest.json).
+pub fn parse_sha256(s: &str) -> Result<[u8; 32], Error> {
+    let bytes = hex::decode(s).map_err(|e| Error::Bundle(format!("invalid sha256: {e:#}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| Error::Bundle("invalid sha256 length".to_string()))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -165,6 +182,25 @@ mod tests {
         let res = ModelBundle::from_path(&path, None);
         std::fs::remove_file(&path).ok();
         assert!(matches!(res, Err(Error::Bundle(_))));
+    }
+
+    static MODEL: &[u8] = include_bytes!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/models/advanced_dfnet16k/advanced_dfnet16k.tar.gz"
+    ));
+
+    #[test]
+    fn static_bytes_load_and_match_directory() {
+        let dir = Path::new(env!("CARGO_WORKSPACE_DIR")).join("models/advanced_dfnet16k");
+        let from_dir = ModelBundle::from_directory(&dir).unwrap();
+        let from_mem = ModelBundle::from_static_bytes(MODEL, Some(from_dir.info().sha256)).unwrap();
+        assert_eq!(from_mem.info(), from_dir.info());
+    }
+
+    #[test]
+    fn static_bytes_hash_mismatch() {
+        let res = ModelBundle::from_static_bytes(MODEL, Some([0u8; 32]));
+        assert!(matches!(res, Err(Error::HashMismatch { .. })));
     }
 
     #[test]

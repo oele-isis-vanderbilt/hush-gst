@@ -126,7 +126,6 @@ pub struct DenoiseArgs {
 }
 
 impl DenoiseArgs {
-    #[allow(dead_code)] // used by the batch runner (Stage 2)
     pub fn jobs(&self) -> usize {
         match self.jobs {
             Some(n) => n as usize,
@@ -211,9 +210,27 @@ mod tests {
     #[test]
     fn denoise_all_options() {
         let d = denoise(&[
-            "denoise", "a.mp3", "dir", "*.m4a", "-o", "out", "--suffix", "_clean", "-r",
-            "--ext", "wav,mp3", "-y", "-j", "8", "--atten-lim-db", "20", "--raw",
-            "--model", "m", "--dry-run", "--json",
+            "denoise",
+            "a.mp3",
+            "dir",
+            "*.m4a",
+            "-o",
+            "out",
+            "--suffix",
+            "_clean",
+            "-r",
+            "--ext",
+            "wav,mp3",
+            "-y",
+            "-j",
+            "8",
+            "--atten-lim-db",
+            "20",
+            "--raw",
+            "--model",
+            "m",
+            "--dry-run",
+            "--json",
         ]);
         assert_eq!(d.inputs, ["a.mp3", "dir", "*.m4a"]);
         assert_eq!(d.output_dir.as_deref(), Some(std::path::Path::new("out")));
@@ -238,7 +255,10 @@ mod tests {
                 "accepted {bad}"
             );
         }
-        assert_eq!(denoise(&["denoise", "a.wav", "--atten-lim-db", "0"]).atten_lim_db, 0.0);
+        assert_eq!(
+            denoise(&["denoise", "a.wav", "--atten-lim-db", "0"]).atten_lim_db,
+            0.0
+        );
     }
 
     #[test]
@@ -270,7 +290,10 @@ mod tests {
 
     #[test]
     fn ffmpeg_subcommands() {
-        match parse(&["ffmpeg", "install", "--force", "--dir", "d"]).unwrap().command {
+        match parse(&["ffmpeg", "install", "--force", "--dir", "d"])
+            .unwrap()
+            .command
+        {
             Command::Ffmpeg(FfmpegCommand::Install { force, dir }) => {
                 assert!(force);
                 assert_eq!(dir.as_deref(), Some(std::path::Path::new("d")));
@@ -281,6 +304,58 @@ mod tests {
             parse(&["ffmpeg", "path"]).unwrap().command,
             Command::Ffmpeg(FfmpegCommand::Path)
         ));
+    }
+
+    /// Help text of every command, as it appears in crates/hush-cli/README.md.
+    fn help_reference() -> String {
+        let commands: &[&[&str]] = &[
+            &[],
+            &["denoise"],
+            &["ffmpeg", "install"],
+            &["ffmpeg", "path"],
+            &["doctor"],
+            &["completions"],
+        ];
+        let mut out = String::new();
+        for path in commands {
+            let mut cmd = Cli::command().term_width(100);
+            cmd.build();
+            let mut c = &mut cmd;
+            for p in *path {
+                c = c.find_subcommand_mut(p).unwrap();
+            }
+            let title = std::iter::once("hush")
+                .chain(path.iter().copied())
+                .collect::<Vec<_>>()
+                .join(" ");
+            out.push_str(&format!(
+                "### `{title}`\n\n```text\n{}\n```\n\n",
+                c.render_help().to_string().trim_end()
+            ));
+        }
+        out
+    }
+
+    /// Fails when the README's command reference is stale.
+    /// Refresh with: UPDATE_README=1 cargo test -p hush-cli readme
+    #[test]
+    fn readme_help_is_current() {
+        const START: &str = "<!-- help:start -->\n";
+        const END: &str = "<!-- help:end -->";
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
+        // Windows checkouts may use CRLF.
+        let readme = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+        let (a, rest) = readme.split_once(START).expect("help:start marker");
+        let (_, b) = rest.split_once(END).expect("help:end marker");
+        let fresh = format!("{a}{START}{}{END}{b}", help_reference());
+        if std::env::var_os("UPDATE_README").is_some() {
+            std::fs::write(path, &fresh).unwrap();
+        } else {
+            assert!(
+                readme == fresh,
+                "crates/hush-cli/README.md is out of date; run UPDATE_README=1 cargo test -p hush-cli readme"
+            );
+        }
     }
 
     #[test]
