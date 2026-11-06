@@ -286,3 +286,121 @@ fn raw_matches_core_within_one_lsb() {
         .fold(0.0, f32::max);
     assert!(max <= 1.0, "max diff {max} LSB");
 }
+
+#[test]
+fn per_channel_keeps_stereo_and_rate() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let t = tempfile::tempdir().unwrap();
+    let mp4 = t.path().join("s.mp4");
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=5:size=160x120:rate=25",
+        "-i",
+        RAW,
+        "-filter_complex",
+        "[1:a]asplit[l][r0];[r0]volume=0.5[r];[l][r]join=inputs=2:channel_layout=stereo[a]",
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-ar",
+        "48000",
+        "-c:v",
+        "mpeg4",
+        "-c:a",
+        "aac",
+        "-shortest",
+        mp4.to_str().unwrap(),
+    ]);
+    let out = hush(t.path(), &["denoise", "s.mp4", "--per-channel", "-q"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (in_s, in_d) = streams(&mp4);
+    let (out_s, out_d) = streams(&denoised(&mp4));
+    let a = audio(&out_s);
+    assert_eq!(a.codec, "aac");
+    assert_eq!(a.rate, Some(48000));
+    assert_eq!(a.channels, Some(2));
+    assert!((in_d - out_d).abs() < 0.1, "{in_d} vs {out_d}");
+    let video = |s: &[Stream]| s.iter().filter(|s| s.kind == "video").count();
+    assert_eq!(video(&in_s), 1);
+    assert_eq!(video(&out_s), 1);
+}
+
+/// Each output channel equals the core run on that channel alone, so neither
+/// channel is shifted or mixed with the other.
+#[test]
+fn per_channel_raw_matches_core() {
+    if !have_ffmpeg() {
+        return;
+    }
+    use hush_core::{DelayMode, ModelBundle, Session, Settings, StreamProcessor};
+
+    let t = tempfile::tempdir().unwrap();
+    let wav = t.path().join("st.wav");
+    ffmpeg(&[
+        "-i",
+        RAW,
+        "-filter_complex",
+        "[0:a]asplit[l][r0];[r0]volume=0.5[r];[l][r]join=inputs=2:channel_layout=stereo[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "pcm_s16le",
+        wav.to_str().unwrap(),
+    ]);
+    let out = hush(
+        t.path(),
+        &["denoise", "st.wav", "--per-channel", "--raw", "-q"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let read = |p: &Path| -> (u16, Vec<i16>) {
+        let r = hound::WavReader::open(p).unwrap();
+        let ch = r.spec().channels;
+        (ch, r.into_samples::<i16>().map(Result::unwrap).collect())
+    };
+    let (in_ch, input) = read(&wav);
+    let (out_ch, cli) = read(&t.path().join("st_denoised.wav"));
+    assert_eq!((in_ch, out_ch), (2, 2));
+
+    let dir = Path::new(env!("CARGO_WORKSPACE_DIR")).join("models/advanced_dfnet16k");
+    let bundle = ModelBundle::from_directory(&dir).unwrap();
+    for c in 0..2 {
+        let chan: Vec<f32> = input
+            .iter()
+            .skip(c)
+            .step_by(2)
+            .map(|&s| s as f32 / 32768.0)
+            .collect();
+        let mut p = StreamProcessor::new(
+            Session::new(&bundle, Settings::default()).unwrap(),
+            DelayMode::Aligned,
+        );
+        let mut core = Vec::new();
+        for b in chan.chunks(8000) {
+            p.push(b, &mut core).unwrap();
+        }
+        p.finish(&mut core).unwrap();
+
+        let got: Vec<i16> = cli.iter().skip(c).step_by(2).copied().collect();
+        assert_eq!(got.len(), core.len(), "channel {c}");
+        let max = got
+            .iter()
+            .zip(&core)
+            .map(|(&a, &b)| (a as f32 - (b * 32768.0).clamp(-32768.0, 32767.0)).abs())
+            .fold(0.0, f32::max);
+        assert!(max <= 1.0, "channel {c}: max diff {max} LSB");
+    }
+}

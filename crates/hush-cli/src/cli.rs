@@ -17,7 +17,8 @@ pub const DEFAULT_EXTS: &[&str] = &[
     long_about = "Remove background noise from audio and video files.\n\n\
         Each file is decoded with FFmpeg, mixed to mono, resampled to 16 kHz, \
         denoised, then written back in its original format and sample rate \
-        (mono). Video streams are copied unchanged.",
+        (mono). With --per-channel each channel is denoised on its own and the \
+        channels are kept. Video streams are copied unchanged.",
     propagate_version = true
 )]
 pub struct Cli {
@@ -112,6 +113,10 @@ pub struct DenoiseArgs {
     #[arg(long)]
     pub raw: bool,
 
+    /// Denoise each channel separately and keep them (e.g. separate L/R mics) instead of mixing to mono
+    #[arg(long)]
+    pub per_channel: bool,
+
     /// Model directory with manifest.json [default: built-in model]
     #[arg(long, value_name = "DIR")]
     pub model: Option<PathBuf>,
@@ -203,6 +208,7 @@ mod tests {
         assert_eq!(d.atten_lim_db, 100.0);
         assert_eq!(d.ext, DEFAULT_EXTS);
         assert!(!d.recursive && !d.overwrite && !d.raw && !d.dry_run && !d.json);
+        assert!(!d.per_channel);
         assert!(d.output_dir.is_none() && d.model.is_none());
         assert!((1..=4).contains(&d.jobs()));
     }
@@ -227,6 +233,7 @@ mod tests {
             "--atten-lim-db",
             "20",
             "--raw",
+            "--per-channel",
             "--model",
             "m",
             "--dry-run",
@@ -239,6 +246,7 @@ mod tests {
         assert_eq!(d.jobs(), 8);
         assert_eq!(d.atten_lim_db, 20.0);
         assert!(d.recursive && d.overwrite && d.raw && d.dry_run && d.json);
+        assert!(d.per_channel);
     }
 
     #[test]

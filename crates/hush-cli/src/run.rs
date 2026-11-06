@@ -101,6 +101,7 @@ pub fn denoise(args: &DenoiseArgs, global: &GlobalArgs) -> Result<u8> {
         bundle: &model.bundle,
         settings,
         raw: args.raw,
+        per_channel: args.per_channel,
         overwrite: args.overwrite,
     };
 
