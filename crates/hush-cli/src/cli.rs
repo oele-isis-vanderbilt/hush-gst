@@ -97,6 +97,15 @@ pub struct DenoiseArgs {
     #[arg(long, value_delimiter = ',', default_values_t = DEFAULT_EXTS.iter().map(|s| s.to_string()))]
     pub ext: Vec<String>,
 
+    /// Ignore files whose name starts with PREFIX when walking directories or
+    /// patterns (repeatable or comma separated, e.g. "screen-,av-mix")
+    #[arg(long, value_delimiter = ',', value_name = "PREFIX", value_parser = parse_prefix)]
+    pub exclude_prefix: Vec<String>,
+
+    /// Skip files without an audio stream instead of reporting them as failed
+    #[arg(long)]
+    pub skip_no_audio: bool,
+
     /// Replace existing outputs (default: skip them)
     #[arg(short = 'y', long)]
     pub overwrite: bool,
@@ -166,6 +175,16 @@ fn parse_atten(s: &str) -> Result<f32, String> {
         return Err(format!("must be between 0 and 100, got {db}"));
     }
     Ok(db)
+}
+
+fn parse_prefix(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        return Err("must not be empty (would exclude every file)".into());
+    }
+    if s.contains(['/', '\\']) {
+        return Err("must not contain path separators".into());
+    }
+    Ok(s.to_string())
 }
 
 fn parse_suffix(s: &str) -> Result<String, String> {
@@ -272,6 +291,25 @@ mod tests {
     #[test]
     fn jobs_must_be_positive() {
         assert!(parse(&["denoise", "a.wav", "-j", "0"]).is_err());
+    }
+
+    #[test]
+    fn exclude_prefix_and_skip_no_audio() {
+        let d = denoise(&["denoise", "a"]);
+        assert!(d.exclude_prefix.is_empty() && !d.skip_no_audio);
+        let d = denoise(&[
+            "denoise",
+            "a",
+            "--exclude-prefix",
+            "screen-,av-mix",
+            "--exclude-prefix",
+            "x",
+            "--skip-no-audio",
+        ]);
+        assert_eq!(d.exclude_prefix, ["screen-", "av-mix", "x"]);
+        assert!(d.skip_no_audio);
+        assert!(parse(&["denoise", "a", "--exclude-prefix", ""]).is_err());
+        assert!(parse(&["denoise", "a", "--exclude-prefix", "a/b"]).is_err());
     }
 
     #[test]

@@ -7,6 +7,19 @@ use serde::Deserialize;
 
 use crate::ffmpeg::Tools;
 
+/// The file has no audio stream. A distinct type so `--skip-no-audio` can tell
+/// it apart from other probe failures.
+#[derive(Debug)]
+pub struct NoAudio;
+
+impl std::fmt::Display for NoAudio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("file has no audio stream")
+    }
+}
+
+impl std::error::Error for NoAudio {}
+
 #[derive(Debug, Clone)]
 pub struct MediaInfo {
     pub duration: Option<f64>,
@@ -81,7 +94,9 @@ fn parse(json: &[u8]) -> Result<MediaInfo> {
     let kind = |s: &RawStream, k: &str| s.codec_type.as_deref() == Some(k);
 
     let audio: Vec<&RawStream> = raw.streams.iter().filter(|s| kind(s, "audio")).collect();
-    let first = audio.first().context("file has no audio stream")?;
+    let Some(first) = audio.first() else {
+        return Err(NoAudio.into());
+    };
     let sample_rate = first
         .sample_rate
         .as_deref()
@@ -142,6 +157,6 @@ mod tests {
     #[test]
     fn no_audio_is_an_error() {
         let json = br#"{"streams":[{"codec_type":"video"}],"format":{"format_name":"mp4"}}"#;
-        assert!(parse(json).is_err());
+        assert!(parse(json).unwrap_err().is::<NoAudio>());
     }
 }

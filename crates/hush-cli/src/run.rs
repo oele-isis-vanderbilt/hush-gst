@@ -11,6 +11,7 @@ use crate::cli::{DenoiseArgs, GlobalArgs};
 use crate::exit;
 use crate::ffmpeg;
 use crate::inputs::{self, Job};
+use crate::media::probe::NoAudio;
 use crate::model;
 use crate::pipeline::{self, Ctx};
 use crate::report::{Outcome, Reporter, Status};
@@ -103,6 +104,7 @@ pub fn denoise(args: &DenoiseArgs, global: &GlobalArgs) -> Result<u8> {
         raw: args.raw,
         per_channel: args.per_channel,
         overwrite: args.overwrite,
+        skip_no_audio: args.skip_no_audio,
     };
 
     let next = AtomicUsize::new(0);
@@ -136,11 +138,10 @@ pub fn denoise(args: &DenoiseArgs, global: &GlobalArgs) -> Result<u8> {
 
 fn one(ctx: &Ctx, job: &Job, rep: &Reporter) -> Outcome {
     let start = Instant::now();
-    let name = job
-        .input
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = std::path::absolute(&job.input)
+        .unwrap_or_else(|_| job.input.clone())
+        .display()
+        .to_string();
 
     let res = pipeline::prepare(ctx, job).and_then(|(info, spec)| {
         let seconds = info.audio.duration.or(info.duration).unwrap_or(0.0);
@@ -160,6 +161,15 @@ fn one(ctx: &Ctx, job: &Job, rep: &Reporter) -> Outcome {
             error: None,
             warnings: done.warnings,
             duration_s: Some(done.seconds),
+            elapsed_s,
+        },
+        Err(e) if ctx.skip_no_audio && e.is::<NoAudio>() => Outcome {
+            input: Some(job.input.clone()),
+            output: Some(job.output.clone()),
+            status: Status::Skipped,
+            error: Some(e.to_string()),
+            warnings: vec![],
+            duration_s: None,
             elapsed_s,
         },
         Err(e) => failed(Some(job), format!("{e:#}"), elapsed_s),

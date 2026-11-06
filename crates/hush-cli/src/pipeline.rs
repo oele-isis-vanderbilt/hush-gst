@@ -35,6 +35,7 @@ pub struct Ctx<'a> {
     pub raw: bool,
     pub per_channel: bool,
     pub overwrite: bool,
+    pub skip_no_audio: bool,
 }
 
 pub struct Done {

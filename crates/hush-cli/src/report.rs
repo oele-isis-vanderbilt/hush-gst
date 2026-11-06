@@ -68,7 +68,7 @@ impl Reporter {
         let bar = if seconds > 0.0 {
             let b = ProgressBar::new((seconds * 1000.0) as u64);
             b.set_style(
-                ProgressStyle::with_template("  {msg:30!} [{bar:20}] {percent:>3}%")
+                ProgressStyle::with_template("  [{bar:20}] {percent:>3}% {wide_msg}")
                     .unwrap()
                     .progress_chars("=> "),
             );
@@ -177,9 +177,16 @@ impl Reporter {
         if self.quiet {
             return;
         }
+        let exists = outcomes
+            .iter()
+            .filter(|o| o.status == Status::Skipped && o.error.as_deref() == Some("output exists"))
+            .count();
         let mut parts = vec![format!("{done} done")];
-        if skipped > 0 {
-            parts.push(format!("{skipped} skipped (exists, use -y to replace)"));
+        if exists > 0 {
+            parts.push(format!("{exists} skipped (exists, use -y to replace)"));
+        }
+        if skipped > exists {
+            parts.push(format!("{} skipped (no audio)", skipped - exists));
         }
         if failed > 0 {
             parts.push(style(format!("{failed} failed")).red().to_string());

@@ -111,23 +111,29 @@ Arguments:
   <INPUTS>...  Files, directories, or glob patterns (e.g. "talks/*.m4a")
 
 Options:
-  -o, --output-dir <DIR>   Write outputs here instead of next to each input
-      --suffix <SUFFIX>    Added to each output file name: talk.m4a -> talk_denoised.m4a [default:
-                           _denoised]
-  -r, --recursive          Descend into subdirectories
-      --ext <EXT>          Extensions taken from directories (comma separated) [default: wav flac
-                           mp3 m4a aac mp4 mov mkv ogg opus webm]
-  -y, --overwrite          Replace existing outputs (default: skip them)
-  -j, --jobs <JOBS>        Number of files processed in parallel [default: min(4, CPUs)]
-      --atten-lim-db <DB>  Maximum noise reduction in dB (0-100, 100 = unlimited) [default: 100]
-      --raw                Write the 16 kHz mono model output as WAV instead of the original format
-      --per-channel        Denoise each channel separately and keep them (e.g. separate L/R mics)
-                           instead of mixing to mono
-      --model <DIR>        Model directory with manifest.json [default: built-in model]
-      --dry-run            List input -> output pairs without processing
-      --json               Print a machine-readable summary on stdout
-  -h, --help               Print help
-  -V, --version            Print version
+  -o, --output-dir <DIR>         Write outputs here instead of next to each input
+      --suffix <SUFFIX>          Added to each output file name: talk.m4a -> talk_denoised.m4a
+                                 [default: _denoised]
+  -r, --recursive                Descend into subdirectories
+      --ext <EXT>                Extensions taken from directories (comma separated) [default: wav
+                                 flac mp3 m4a aac mp4 mov mkv ogg opus webm]
+      --exclude-prefix <PREFIX>  Ignore files whose name starts with PREFIX when walking directories
+                                 or patterns (repeatable or comma separated, e.g. "screen-,av-mix")
+      --skip-no-audio            Skip files without an audio stream instead of reporting them as
+                                 failed
+  -y, --overwrite                Replace existing outputs (default: skip them)
+  -j, --jobs <JOBS>              Number of files processed in parallel [default: min(4, CPUs)]
+      --atten-lim-db <DB>        Maximum noise reduction in dB (0-100, 100 = unlimited) [default:
+                                 100]
+      --raw                      Write the 16 kHz mono model output as WAV instead of the original
+                                 format
+      --per-channel              Denoise each channel separately and keep them (e.g. separate L/R
+                                 mics) instead of mixing to mono
+      --model <DIR>              Model directory with manifest.json [default: built-in model]
+      --dry-run                  List input -> output pairs without processing
+      --json                     Print a machine-readable summary on stdout
+  -h, --help                     Print help
+  -V, --version                  Print version
 
 Global options:
   -v, --verbose...     More output (repeat for more detail)
