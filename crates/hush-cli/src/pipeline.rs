@@ -4,7 +4,11 @@
 //! input ──ffmpeg──▶ f32le 16 kHz mono ──hush──▶ f32le 16 kHz mono ──ffmpeg──▶ temp file ──rename──▶ output
 //!                                                    (+ video / metadata copied from input)
 //! ```
+//!
+//! With `--per-channel` the PCM carries N interleaved channels; each channel goes
+//! through its own `StreamProcessor` (Aligned), so the channels stay in sync.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -19,7 +23,7 @@ use crate::inputs::Job;
 use crate::media::codec::{self, EncodeSpec};
 use crate::media::probe::{self, MediaInfo};
 
-/// Samples read from the decoder per step (0.5 s at 16 kHz).
+/// Frames read from the decoder per step (0.5 s at 16 kHz).
 const BLOCK: usize = 8000;
 
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
@@ -29,7 +33,9 @@ pub struct Ctx<'a> {
     pub bundle: &'a ModelBundle,
     pub settings: Settings,
     pub raw: bool,
+    pub per_channel: bool,
     pub overwrite: bool,
+    pub skip_no_audio: bool,
 }
 
 pub struct Done {
@@ -42,9 +48,10 @@ pub struct Done {
 pub fn prepare(ctx: &Ctx, job: &Job) -> Result<(MediaInfo, EncodeSpec)> {
     let info = probe::probe(ctx.tools, &job.input)?;
     let spec = if ctx.raw {
-        codec::raw_spec(ctx.bundle.info().sample_rate as u32)
+        let channels = codec::channels_for(&info, ctx.per_channel);
+        codec::raw_spec(ctx.bundle.info().sample_rate as u32, channels)
     } else {
-        codec::spec_for(&job.input, &info)?
+        codec::spec_for(&job.input, &info, ctx.per_channel)?
     };
     Ok((info, spec))
 }
@@ -83,12 +90,14 @@ pub fn run(
         .with_context(|| format!("creating a temp file in {}", out_dir.display()))?
         .into_temp_path();
 
-    // Decoder: ffmpeg does the downmix and the resampling.
+    // Decoder: ffmpeg does the downmix (unless per channel) and the resampling.
+    let channels = spec.channels.max(1) as usize;
     let mut dec_cmd = ctx.tools.ffmpeg();
     dec_cmd
         .arg("-i")
         .arg(&job.input)
-        .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1"])
+        .args(["-map", "0:a:0", "-vn", "-sn", "-dn"])
+        .args(["-ac", &channels.to_string()])
         .args(["-ar", &model_rate.to_string(), "-f", "f32le", "pipe:1"]);
     let mut dec = Proc::spawn(dec_cmd, false, true, "decoder")?;
 
@@ -101,8 +110,8 @@ pub fn run(
         }
     };
 
-    let result = stream(ctx, &mut dec, &mut enc, model_rate, progress);
-    let samples = match result {
+    let result = stream(ctx, &mut dec, &mut enc, model_rate, channels, progress);
+    let frames = match result {
         Ok(n) => n,
         Err(e) => {
             dec.kill();
@@ -118,18 +127,19 @@ pub fn run(
     };
     dec.wait()?;
     enc.wait()?;
-    if samples == 0 {
+    if frames == 0 {
         bail!("decoder produced no audio");
     }
 
     // Output length must match: Aligned mode keeps sample counts equal, so any
     // larger gap means the encoder dropped audio.
-    let seconds = samples as f64 / model_rate as f64;
+    let seconds = frames as f64 / model_rate as f64;
     let out_info = probe::probe(ctx.tools, &tmp).context("checking the written file")?;
-    if out_info.audio.channels != 1 {
+    if out_info.audio.channels != spec.channels {
         bail!(
-            "output has {} channels, expected 1",
-            out_info.audio.channels
+            "output has {} channels, expected {}",
+            out_info.audio.channels,
+            spec.channels
         );
     }
     if let Some(d) = out_info.audio.duration.or(out_info.duration) {
@@ -156,6 +166,7 @@ fn encoder_command(
     model_rate: usize,
     out: &Path,
 ) -> Command {
+    let channels = spec.channels.to_string();
     let mut c = tools.ffmpeg();
     c.arg("-y").args([
         "-f",
@@ -163,7 +174,7 @@ fn encoder_command(
         "-ar",
         &model_rate.to_string(),
         "-ac",
-        "1",
+        &channels,
         "-i",
         "pipe:0",
     ]);
@@ -185,31 +196,41 @@ fn encoder_command(
         c.args(["-map_metadata", "-1"]);
     }
     c.args(&spec.audio_args)
-        .args(["-ar", &spec.sample_rate.to_string(), "-ac", "1"])
+        .args(["-ar", &spec.sample_rate.to_string(), "-ac", &channels])
         .args(["-f", spec.muxer])
         .arg(out);
     c
 }
 
-/// Pump decoder -> model -> encoder. Returns samples written.
+/// Pump decoder -> model -> encoder. `channels` interleaved channels, each
+/// denoised by its own processor. Returns frames written (samples per channel).
 fn stream(
     ctx: &Ctx,
     dec: &mut Proc,
     enc: &mut Proc,
     model_rate: usize,
+    channels: usize,
     progress: &dyn Fn(f64),
 ) -> Result<u64> {
-    let session = Session::new(ctx.bundle, ctx.settings)?;
-    let mut proc = StreamProcessor::new(session, DelayMode::Aligned);
+    let mut procs = (0..channels)
+        .map(|_| {
+            Ok(StreamProcessor::new(
+                Session::new(ctx.bundle, ctx.settings)?,
+                DelayMode::Aligned,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let mut reader = dec.child.stdout.take().context("decoder stdout")?;
     let mut writer = enc.child.stdin.take().context("encoder stdin")?;
 
-    let mut bytes = vec![0u8; BLOCK * 4];
-    let mut have = 0; // bytes in `bytes`, may end mid-sample
-    let mut input = Vec::with_capacity(BLOCK);
+    let frame_bytes = 4 * channels;
+    let mut bytes = vec![0u8; BLOCK * frame_bytes];
+    let mut have = 0; // bytes in `bytes`, may end mid-frame
+    let mut input: Vec<Vec<f32>> = vec![Vec::with_capacity(BLOCK); channels];
     let mut output = Vec::with_capacity(BLOCK * 2);
-    let mut out_bytes = Vec::with_capacity(BLOCK * 8);
+    let mut ready: Vec<VecDeque<f32>> = vec![VecDeque::new(); channels];
+    let mut out_bytes = Vec::with_capacity(BLOCK * 8 * channels);
     let mut total_in: u64 = 0;
     let mut total_out: u64 = 0;
 
@@ -224,41 +245,52 @@ fn stream(
             break;
         }
         have += n;
-        let whole = have / 4 * 4;
-        input.clear();
-        input.extend(
-            bytes[..whole]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b)),
-        );
+        let whole = have / frame_bytes * frame_bytes;
+        for ch in input.iter_mut() {
+            ch.clear();
+        }
+        for (i, b) in bytes[..whole].as_chunks::<4>().0.iter().enumerate() {
+            input[i % channels].push(f32::from_le_bytes(*b));
+        }
         bytes.copy_within(whole..have, 0);
         have -= whole;
 
-        output.clear();
-        proc.push(&input, &mut output)?;
-        write_f32(&mut writer, &output, &mut out_bytes)?;
-        total_in += input.len() as u64;
-        total_out += output.len() as u64;
+        for ((p, inp), q) in procs.iter_mut().zip(&input).zip(&mut ready) {
+            output.clear();
+            p.push(inp, &mut output)?;
+            q.extend(&output);
+        }
+        total_out += write_frames(&mut writer, &mut ready, &mut out_bytes)?;
+        total_in += input[0].len() as u64;
         progress(total_in as f64 / model_rate as f64);
     }
 
-    output.clear();
-    proc.finish(&mut output)?;
-    write_f32(&mut writer, &output, &mut out_bytes)?;
-    total_out += output.len() as u64;
+    for (p, q) in procs.iter_mut().zip(&mut ready) {
+        output.clear();
+        p.finish(&mut output)?;
+        q.extend(&output);
+    }
+    total_out += write_frames(&mut writer, &mut ready, &mut out_bytes)?;
+    if ready.iter().any(|q| !q.is_empty()) {
+        bail!("channels ended with different lengths");
+    }
     writer.flush().context("writing to encoder")?;
     drop(writer); // EOF for the encoder
     Ok(total_out)
 }
 
-fn write_f32(w: &mut impl Write, samples: &[f32], buf: &mut Vec<u8>) -> Result<()> {
+/// Write the frames every channel has ready, interleaved. Returns frames written.
+fn write_frames(w: &mut impl Write, ready: &mut [VecDeque<f32>], buf: &mut Vec<u8>) -> Result<u64> {
+    let n = ready.iter().map(VecDeque::len).min().unwrap_or(0);
     buf.clear();
-    for s in samples {
-        buf.extend_from_slice(&s.to_le_bytes());
+    for _ in 0..n {
+        for q in ready.iter_mut() {
+            let s = q.pop_front().unwrap_or_default();
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
     }
-    w.write_all(buf).context("writing to encoder")
+    w.write_all(buf).context("writing to encoder")?;
+    Ok(n as u64)
 }
 
 /// A child ffmpeg with its stderr drained on a thread (so it never blocks).

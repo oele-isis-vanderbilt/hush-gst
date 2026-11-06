@@ -14,6 +14,8 @@ pub struct EncodeSpec {
     /// Audio encoder options (`-c:a ...` and quality flags).
     pub audio_args: Vec<String>,
     pub sample_rate: u32,
+    /// Audio channels written: 1, or the input's count with `--per-channel`.
+    pub channels: u32,
     /// Copy video streams from the input (video containers only).
     pub copy_video: bool,
     /// Copy subtitle streams from the input (Matroska only).
@@ -22,19 +24,29 @@ pub struct EncodeSpec {
     pub copy_metadata: bool,
 }
 
-/// `--raw`: the model's own output, 16 kHz mono 16-bit WAV.
-pub fn raw_spec(model_rate: u32) -> EncodeSpec {
+/// `--raw`: the model's own output, 16 kHz 16-bit WAV (mono unless `--per-channel`).
+pub fn raw_spec(model_rate: u32, channels: u32) -> EncodeSpec {
     EncodeSpec {
         muxer: "wav",
         audio_args: args(&["-c:a", "pcm_s16le"]),
         sample_rate: model_rate,
+        channels,
         copy_video: false,
         copy_subtitles: false,
         copy_metadata: false,
     }
 }
 
-pub fn spec_for(input: &Path, info: &MediaInfo) -> Result<EncodeSpec> {
+/// Channels to write: the input's count with `--per-channel`, else mono.
+pub fn channels_for(info: &MediaInfo, per_channel: bool) -> u32 {
+    if per_channel {
+        info.audio.channels.max(1)
+    } else {
+        1
+    }
+}
+
+pub fn spec_for(input: &Path, info: &MediaInfo, per_channel: bool) -> Result<EncodeSpec> {
     let ext = input
         .extension()
         .and_then(|e| e.to_str())
@@ -100,6 +112,7 @@ pub fn spec_for(input: &Path, info: &MediaInfo) -> Result<EncodeSpec> {
         muxer,
         audio_args,
         sample_rate: a.sample_rate,
+        channels: channels_for(info, per_channel),
         copy_video: video_container && info.video_streams > 0,
         copy_subtitles: muxer == "matroska" && info.subtitle_streams > 0,
         copy_metadata: true,
@@ -134,7 +147,12 @@ mod tests {
 
     #[test]
     fn mp3_keeps_bitrate_and_rate() {
-        let s = spec_for(Path::new("a.MP3"), &info("mp3", 44100, Some(256_000), 0)).unwrap();
+        let s = spec_for(
+            Path::new("a.MP3"),
+            &info("mp3", 44100, Some(256_000), 0),
+            false,
+        )
+        .unwrap();
         assert_eq!(s.muxer, "mp3");
         assert_eq!(s.audio_args, ["-c:a", "libmp3lame", "-b:a", "256k"]);
         assert_eq!(s.sample_rate, 44100);
@@ -143,7 +161,7 @@ mod tests {
 
     #[test]
     fn mp4_copies_video() {
-        let s = spec_for(Path::new("a.mp4"), &info("aac", 48000, None, 1)).unwrap();
+        let s = spec_for(Path::new("a.mp4"), &info("aac", 48000, None, 1), false).unwrap();
         assert_eq!(s.muxer, "mp4");
         assert_eq!(s.audio_args, ["-c:a", "aac", "-b:a", "128k"]);
         assert!(s.copy_video);
@@ -151,21 +169,36 @@ mod tests {
 
     #[test]
     fn m4a_never_copies_video() {
-        let s = spec_for(Path::new("a.m4a"), &info("aac", 48000, None, 1)).unwrap();
+        let s = spec_for(Path::new("a.m4a"), &info("aac", 48000, None, 1), false).unwrap();
         assert_eq!(s.muxer, "ipod");
         assert!(!s.copy_video);
     }
 
     #[test]
     fn pcm_keeps_codec() {
-        let s = spec_for(Path::new("a.wav"), &info("pcm_s24le", 48000, None, 0)).unwrap();
+        let s = spec_for(
+            Path::new("a.wav"),
+            &info("pcm_s24le", 48000, None, 0),
+            false,
+        )
+        .unwrap();
         assert_eq!(s.audio_args, ["-c:a", "pcm_s24le"]);
     }
 
     #[test]
+    fn per_channel_keeps_channels() {
+        let i = info("aac", 48000, None, 1);
+        let s = spec_for(Path::new("a.mp4"), &i, true).unwrap();
+        assert_eq!(s.channels, 2);
+        assert_eq!(s.sample_rate, 48000);
+        assert_eq!(spec_for(Path::new("a.mp4"), &i, false).unwrap().channels, 1);
+        assert_eq!(raw_spec(16000, channels_for(&i, true)).channels, 2);
+    }
+
+    #[test]
     fn unsupported_is_an_error() {
-        assert!(spec_for(Path::new("a.xyz"), &info("aac", 48000, None, 0)).is_err());
-        assert!(spec_for(Path::new("a.mkv"), &info("dts", 48000, None, 0)).is_err());
-        assert!(spec_for(Path::new("a"), &info("aac", 48000, None, 0)).is_err());
+        assert!(spec_for(Path::new("a.xyz"), &info("aac", 48000, None, 0), false).is_err());
+        assert!(spec_for(Path::new("a.mkv"), &info("dts", 48000, None, 0), false).is_err());
+        assert!(spec_for(Path::new("a"), &info("aac", 48000, None, 0), false).is_err());
     }
 }

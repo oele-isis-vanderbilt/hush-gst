@@ -129,6 +129,7 @@ hush denoise talk.m4a                      # writes talk_denoised.m4a next to it
 hush denoise -r -o clean/ recordings/      # a whole folder tree, outputs into clean/
 hush denoise "lectures/*.mp4" -j 8         # glob (quoted, so it also works on Windows), 8 files at once
 hush denoise --atten-lim-db 20 *.mp3       # gentler: at most 20 dB of noise reduction
+hush denoise --per-channel lecture.mp4     # L and R mics denoised separately, kept as stereo
 hush denoise --raw in.wav                  # 16 kHz mono WAV, exactly what the model produced
 hush denoise --dry-run --json recordings/  # show what would happen, as JSON
 ```
@@ -139,14 +140,16 @@ denoised (`*_denoised.*`) are skipped when found through a folder or a pattern.
 ## What happens to your file
 
 1. FFmpeg decodes the first audio stream, mixes all channels to mono and
-   resamples to 16 kHz.
+   resamples to 16 kHz. With `--per-channel` the channels are kept and each one
+   is denoised separately.
 2. The model denoises it. Output stays sample-aligned with the input: same length,
    no added delay.
 3. FFmpeg encodes the result back into the **same format, codec, sample rate and
    bitrate** as the input. Video streams are copied unchanged; metadata and
    chapters are kept.
 
-The output is **mono**. Supported inputs: WAV, FLAC, MP3, M4A/AAC, MP4, MOV, MKV,
+The output is **mono**, unless `--per-channel` is given: then it has the same
+channels as the input, still in sync. Supported inputs: WAV, FLAC, MP3, M4A/AAC, MP4, MOV, MKV,
 WebM, Ogg and Opus. Other formats: use `--raw`. The full rules are in
 [`crates/hush-cli/README.md`](crates/hush-cli/README.md#output-format-rules).
 

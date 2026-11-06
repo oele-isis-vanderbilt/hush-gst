@@ -25,6 +25,8 @@ pub struct Options<'a> {
     pub suffix: &'a str,
     pub recursive: bool,
     pub exts: &'a [String],
+    /// File-name prefixes ignored in directories and patterns.
+    pub exclude: &'a [String],
     pub raw: bool,
 }
 
@@ -35,6 +37,7 @@ impl<'a> From<&'a DenoiseArgs> for Options<'a> {
             suffix: &a.suffix,
             recursive: a.recursive,
             exts: &a.ext,
+            exclude: &a.exclude_prefix,
             raw: a.raw,
         }
     }
@@ -61,7 +64,11 @@ pub fn plan(inputs: &[String], opts: &Options) -> Result<Plan> {
                 Ok(paths) => {
                     for p in paths {
                         match p {
-                            Ok(p) if p.is_file() && !is_own_output(&p, opts.suffix) => {
+                            Ok(p)
+                                if p.is_file()
+                                    && !is_own_output(&p, opts.suffix)
+                                    && !is_excluded(&p, opts.exclude) =>
+                            {
                                 found.push(p)
                             }
                             Ok(_) => {}
@@ -121,7 +128,11 @@ fn walk(dir: &Path, opts: &Options, out: &mut Vec<PathBuf>, errors: &mut Vec<Str
             if opts.recursive {
                 walk(&p, opts, out, errors);
             }
-        } else if has_ext(&p, opts.exts) && !is_own_output(&p, opts.suffix) && !is_hidden(&p) {
+        } else if has_ext(&p, opts.exts)
+            && !is_own_output(&p, opts.suffix)
+            && !is_hidden(&p)
+            && !is_excluded(&p, opts.exclude)
+        {
             out.push(p);
         }
     }
@@ -139,6 +150,12 @@ fn is_own_output(p: &Path, suffix: &str) -> bool {
     p.file_stem()
         .and_then(|s| s.to_str())
         .is_some_and(|s| s.ends_with(suffix))
+}
+
+fn is_excluded(p: &Path, prefixes: &[String]) -> bool {
+    p.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| prefixes.iter().any(|x| s.starts_with(x.as_str())))
 }
 
 fn is_hidden(p: &Path) -> bool {
@@ -185,6 +202,7 @@ mod tests {
             suffix: "_denoised",
             recursive,
             exts,
+            exclude: &[],
             raw,
         }
     }
@@ -246,6 +264,35 @@ mod tests {
             .map(|j| j.input.file_name().unwrap().to_owned())
             .collect();
         assert_eq!(names, ["a.wav", "b.MP3"]);
+    }
+
+    #[test]
+    fn exclude_prefix_skips_found_files_only() {
+        let t = tempfile::tempdir().unwrap();
+        touch(t.path(), "1/mic-1.m4a");
+        touch(t.path(), "1/screen-1.mp4");
+        let named = touch(t.path(), "screen-2.mp4");
+        let e = exts();
+        let ex = ["screen-".to_string()];
+        let o = Options {
+            exclude: &ex,
+            ..opts(&e, None, true, false)
+        };
+
+        let walked = plan(&[s(t.path())], &o).unwrap();
+        let names: Vec<_> = walked
+            .jobs
+            .iter()
+            .map(|j| j.input.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["mic-1.m4a"]);
+
+        let globbed = plan(&[s(&t.path().join("1/*"))], &o).unwrap();
+        assert_eq!(globbed.jobs.len(), 1);
+
+        // Named explicitly: still taken.
+        let p = plan(&[s(&named)], &o).unwrap();
+        assert_eq!(p.jobs.len(), 1);
     }
 
     #[test]

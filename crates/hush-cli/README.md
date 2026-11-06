@@ -16,8 +16,13 @@ input ──ffmpeg──▶ f32le 16 kHz mono ──StreamProcessor──▶ f32
 - The three stages run at the same time over pipes, so memory use stays flat
   (about 60 MB) however long the file is.
 - Output is written to a hidden temp file next to the output and renamed only
-  after a check (ffprobe: mono, duration matches). A failure or Ctrl-C leaves
+  after a check (ffprobe: channel count and duration match). A failure or Ctrl-C leaves
   nothing behind.
+- `--per-channel` keeps the input's channels (e.g. one mic on L, one on R): the
+  decoder outputs all channels at 16 kHz, each channel goes through its own
+  model session, and the channels are interleaved again before encoding. Every
+  session runs with the model delay removed, so the channels stay in sync with
+  each other and with the video. Costs about N times the CPU for N channels.
 - `--jobs N` processes N files in parallel. Each file gets its own model
   session; the model weights are shared.
 
@@ -32,7 +37,9 @@ input ──ffmpeg──▶ f32le 16 kHz mono ──StreamProcessor──▶ f32
 | ALAC | `alac` | sample rate |
 | Opus / Vorbis | `libopus` / `libvorbis` | bitrate, sample rate |
 
-Output is always mono. Video streams are copied only into video containers
+Output is mono unless `--per-channel` is given, in which case it has the input's
+channel count (written with ffmpeg's default layout for that count; MP3 holds at
+most 2). Video streams are copied only into video containers
 (mp4, mov, mkv, webm); subtitles only into mkv. Cover art is dropped. Other
 codecs or extensions are refused with a hint to use `--raw` (16 kHz mono WAV).
 
@@ -104,21 +111,29 @@ Arguments:
   <INPUTS>...  Files, directories, or glob patterns (e.g. "talks/*.m4a")
 
 Options:
-  -o, --output-dir <DIR>   Write outputs here instead of next to each input
-      --suffix <SUFFIX>    Added to each output file name: talk.m4a -> talk_denoised.m4a [default:
-                           _denoised]
-  -r, --recursive          Descend into subdirectories
-      --ext <EXT>          Extensions taken from directories (comma separated) [default: wav flac
-                           mp3 m4a aac mp4 mov mkv ogg opus webm]
-  -y, --overwrite          Replace existing outputs (default: skip them)
-  -j, --jobs <JOBS>        Number of files processed in parallel [default: min(4, CPUs)]
-      --atten-lim-db <DB>  Maximum noise reduction in dB (0-100, 100 = unlimited) [default: 100]
-      --raw                Write the 16 kHz mono model output as WAV instead of the original format
-      --model <DIR>        Model directory with manifest.json [default: built-in model]
-      --dry-run            List input -> output pairs without processing
-      --json               Print a machine-readable summary on stdout
-  -h, --help               Print help
-  -V, --version            Print version
+  -o, --output-dir <DIR>         Write outputs here instead of next to each input
+      --suffix <SUFFIX>          Added to each output file name: talk.m4a -> talk_denoised.m4a
+                                 [default: _denoised]
+  -r, --recursive                Descend into subdirectories
+      --ext <EXT>                Extensions taken from directories (comma separated) [default: wav
+                                 flac mp3 m4a aac mp4 mov mkv ogg opus webm]
+      --exclude-prefix <PREFIX>  Ignore files whose name starts with PREFIX when walking directories
+                                 or patterns (repeatable or comma separated, e.g. "screen-,av-mix")
+      --skip-no-audio            Skip files without an audio stream instead of reporting them as
+                                 failed
+  -y, --overwrite                Replace existing outputs (default: skip them)
+  -j, --jobs <JOBS>              Number of files processed in parallel [default: min(4, CPUs)]
+      --atten-lim-db <DB>        Maximum noise reduction in dB (0-100, 100 = unlimited) [default:
+                                 100]
+      --raw                      Write the 16 kHz mono model output as WAV instead of the original
+                                 format
+      --per-channel              Denoise each channel separately and keep them (e.g. separate L/R
+                                 mics) instead of mixing to mono
+      --model <DIR>              Model directory with manifest.json [default: built-in model]
+      --dry-run                  List input -> output pairs without processing
+      --json                     Print a machine-readable summary on stdout
+  -h, --help                     Print help
+  -V, --version                  Print version
 
 Global options:
   -v, --verbose...     More output (repeat for more detail)

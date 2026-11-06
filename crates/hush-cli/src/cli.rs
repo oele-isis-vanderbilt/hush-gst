@@ -17,7 +17,8 @@ pub const DEFAULT_EXTS: &[&str] = &[
     long_about = "Remove background noise from audio and video files.\n\n\
         Each file is decoded with FFmpeg, mixed to mono, resampled to 16 kHz, \
         denoised, then written back in its original format and sample rate \
-        (mono). Video streams are copied unchanged.",
+        (mono). With --per-channel each channel is denoised on its own and the \
+        channels are kept. Video streams are copied unchanged.",
     propagate_version = true
 )]
 pub struct Cli {
@@ -96,6 +97,15 @@ pub struct DenoiseArgs {
     #[arg(long, value_delimiter = ',', default_values_t = DEFAULT_EXTS.iter().map(|s| s.to_string()))]
     pub ext: Vec<String>,
 
+    /// Ignore files whose name starts with PREFIX when walking directories or
+    /// patterns (repeatable or comma separated, e.g. "screen-,av-mix")
+    #[arg(long, value_delimiter = ',', value_name = "PREFIX", value_parser = parse_prefix)]
+    pub exclude_prefix: Vec<String>,
+
+    /// Skip files without an audio stream instead of reporting them as failed
+    #[arg(long)]
+    pub skip_no_audio: bool,
+
     /// Replace existing outputs (default: skip them)
     #[arg(short = 'y', long)]
     pub overwrite: bool,
@@ -111,6 +121,10 @@ pub struct DenoiseArgs {
     /// Write the 16 kHz mono model output as WAV instead of the original format
     #[arg(long)]
     pub raw: bool,
+
+    /// Denoise each channel separately and keep them (e.g. separate L/R mics) instead of mixing to mono
+    #[arg(long)]
+    pub per_channel: bool,
 
     /// Model directory with manifest.json [default: built-in model]
     #[arg(long, value_name = "DIR")]
@@ -163,6 +177,16 @@ fn parse_atten(s: &str) -> Result<f32, String> {
     Ok(db)
 }
 
+fn parse_prefix(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        return Err("must not be empty (would exclude every file)".into());
+    }
+    if s.contains(['/', '\\']) {
+        return Err("must not contain path separators".into());
+    }
+    Ok(s.to_string())
+}
+
 fn parse_suffix(s: &str) -> Result<String, String> {
     if s.is_empty() {
         return Err("must not be empty (outputs would overwrite inputs)".into());
@@ -203,6 +227,7 @@ mod tests {
         assert_eq!(d.atten_lim_db, 100.0);
         assert_eq!(d.ext, DEFAULT_EXTS);
         assert!(!d.recursive && !d.overwrite && !d.raw && !d.dry_run && !d.json);
+        assert!(!d.per_channel);
         assert!(d.output_dir.is_none() && d.model.is_none());
         assert!((1..=4).contains(&d.jobs()));
     }
@@ -227,6 +252,7 @@ mod tests {
             "--atten-lim-db",
             "20",
             "--raw",
+            "--per-channel",
             "--model",
             "m",
             "--dry-run",
@@ -239,6 +265,7 @@ mod tests {
         assert_eq!(d.jobs(), 8);
         assert_eq!(d.atten_lim_db, 20.0);
         assert!(d.recursive && d.overwrite && d.raw && d.dry_run && d.json);
+        assert!(d.per_channel);
     }
 
     #[test]
@@ -264,6 +291,25 @@ mod tests {
     #[test]
     fn jobs_must_be_positive() {
         assert!(parse(&["denoise", "a.wav", "-j", "0"]).is_err());
+    }
+
+    #[test]
+    fn exclude_prefix_and_skip_no_audio() {
+        let d = denoise(&["denoise", "a"]);
+        assert!(d.exclude_prefix.is_empty() && !d.skip_no_audio);
+        let d = denoise(&[
+            "denoise",
+            "a",
+            "--exclude-prefix",
+            "screen-,av-mix",
+            "--exclude-prefix",
+            "x",
+            "--skip-no-audio",
+        ]);
+        assert_eq!(d.exclude_prefix, ["screen-", "av-mix", "x"]);
+        assert!(d.skip_no_audio);
+        assert!(parse(&["denoise", "a", "--exclude-prefix", ""]).is_err());
+        assert!(parse(&["denoise", "a", "--exclude-prefix", "a/b"]).is_err());
     }
 
     #[test]
