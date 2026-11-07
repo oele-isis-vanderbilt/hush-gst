@@ -42,13 +42,16 @@ Debug builds of the model are slow; use `--release` for anything that runs audio
 
 - A `Session` is not `Send`: create it on the thread that uses it. Share the
   `ModelBundle` (cheap `Clone`, `Arc` inside).
-- Files use `DelayMode::Aligned` (output length = input length). Live audio uses `Live`.
+- Files and the GStreamer element use `DelayMode::Aligned` (output length = input
+  length). `Live` is for callers that need one output sample per input sample.
 - `hush-core` never prints; it returns `hush_core::Error`.
 - Fixed runtime values (thresholds, channel count) live in
   `crates/hush-core/src/constants.rs`; they are not CLI options.
 - `CARGO_WORKSPACE_DIR` comes from `.cargo/config.toml`; tests and `include_bytes!` use it.
-- The `hush` element is mono 16 kHz F32, uses `DelayMode::Live` through a
-  `StreamWorker`, and reports 320 samples (20 ms) of latency; EOS pushes that tail.
+- The `hush` element is mono 16 kHz F32 and uses `DelayMode::Aligned` through a
+  `StreamWorker`: output timestamps are the input's, output length = input length.
+  It reports hop + model delay (320 samples, 20 ms) as latency. EOS, GAP, a new
+  SEGMENT and DISCONT flush the model first and start a new stream.
   Its `include_bytes!` uses `CARGO_MANIFEST_DIR` so git-dependency builds work.
 
 ## CLI rules

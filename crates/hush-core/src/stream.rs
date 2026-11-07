@@ -80,6 +80,12 @@ impl StreamProcessor {
         self.session.sample_rate()
     }
 
+    /// The model's own lag (STFT overlap plus lookahead), in samples. The same
+    /// in both modes; Aligned removes it from the output, Live keeps it.
+    pub fn model_delay_samples(&self) -> usize {
+        self.model_delay
+    }
+
     /// Live: how far output lags input (one hop of buffering plus the model delay).
     /// Aligned: 0.
     pub fn latency_samples(&self) -> usize {
@@ -216,6 +222,7 @@ struct Info {
     hop_size: usize,
     sample_rate: usize,
     latency_samples: usize,
+    model_delay_samples: usize,
 }
 
 /// A `StreamProcessor` on its own thread. `Send`, so an element can hold it.
@@ -247,6 +254,7 @@ impl StreamWorker {
                     hop_size: proc.hop_size(),
                     sample_rate: proc.sample_rate(),
                     latency_samples: proc.latency_samples(),
+                    model_delay_samples: proc.model_delay_samples(),
                 }));
 
                 for cmd in rx {
@@ -291,6 +299,10 @@ impl StreamWorker {
 
     pub fn latency_samples(&self) -> usize {
         self.info.latency_samples
+    }
+
+    pub fn model_delay_samples(&self) -> usize {
+        self.info.model_delay_samples
     }
 
     pub fn push(&self, input: &[f32], output: &mut Vec<f32>) -> Result<(), Error> {

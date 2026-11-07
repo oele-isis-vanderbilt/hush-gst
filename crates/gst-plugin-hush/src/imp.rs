@@ -4,9 +4,13 @@
 // If a copy of the MPL was not distributed with this file, You can obtain one at
 // <https://mozilla.org/MPL/2.0/>.
 
-//! `hush` element: 16 kHz mono F32 in, denoised audio out, one output buffer
-//! per input buffer. Output lags input by the model latency (320 samples,
-//! 20 ms), which the latency query reports. EOS pushes the remaining tail.
+//! `hush` element: 16 kHz mono F32 in, denoised audio out.
+//!
+//! The model runs in `DelayMode::Aligned`: output sample i is input sample i,
+//! so output timestamps are the input's own timestamps and the total output
+//! length equals the input length. The output leaves the element up to 320
+//! samples (20 ms) after the matching input arrived; the latency query reports
+//! that. Buffer sizes are not 1:1 with the input.
 
 use std::sync::{LazyLock, Mutex, OnceLock};
 
@@ -16,7 +20,7 @@ use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst_audio::subclass::prelude::*;
 use gst_base::prelude::*;
-use gst_base::subclass::base_transform::BaseTransformImplExt;
+use gst_base::subclass::base_transform::{BaseTransformImplExt, GenerateOutputSuccess};
 use hush_core::{DelayMode, ModelBundle, ModelManifest, StreamWorker, parse_sha256};
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
@@ -83,8 +87,57 @@ struct State {
     worker: StreamWorker,
     /// Scratch output, reused across buffers.
     out: Vec<f32>,
-    /// End time of the last input buffer: where the EOS tail goes.
-    next_pts: Option<gst::ClockTime>,
+    /// True once the current stream has seen its first buffer.
+    anchored: bool,
+    /// PTS of the first input sample of the current stream.
+    base_pts: Option<gst::ClockTime>,
+    /// Buffer offset (sample index) of the first input sample, if upstream sets offsets.
+    base_offset: Option<u64>,
+    /// Samples pushed into the model in the current stream.
+    samples_in: u64,
+    /// Samples emitted in the current stream. Output sample n has time
+    /// `base_pts + n / rate`.
+    samples_out: u64,
+}
+
+impl State {
+    /// Forget the current stream; the next buffer starts a new one.
+    fn reset(&mut self) -> Result<(), hush_core::Error> {
+        self.anchored = false;
+        self.base_pts = None;
+        self.base_offset = None;
+        self.samples_in = 0;
+        self.samples_out = 0;
+        self.worker.reset()
+    }
+
+    /// Wrap `self.out` into a buffer timestamped from the stream position.
+    fn take_output(&mut self) -> Option<gst::Buffer> {
+        if self.out.is_empty() {
+            return None;
+        }
+        let start = self.samples_out;
+        let end = start + self.out.len() as u64;
+        let mut buffer = gst::Buffer::from_mut_slice(self.out.as_byte_slice().to_vec());
+        {
+            let buffer = buffer.get_mut().unwrap();
+            if let Some(base) = self.base_pts {
+                let pts = base + samples_to_time(start);
+                buffer.set_pts(pts);
+                // From the end time, so rounding never accumulates.
+                buffer.set_duration((base + samples_to_time(end)) - pts);
+            }
+            if let Some(base) = self.base_offset {
+                buffer.set_offset(base + start);
+                buffer.set_offset_end(base + end);
+            }
+            if start == 0 {
+                buffer.set_flags(gst::BufferFlags::DISCONT);
+            }
+        }
+        self.samples_out = end;
+        Some(buffer)
+    }
 }
 
 #[derive(Default)]
@@ -94,45 +147,44 @@ pub struct HushNoiseFilter {
 }
 
 impl HushNoiseFilter {
-    /// Flush the model at EOS and push its last `latency` samples downstream.
-    fn push_tail(&self) -> Result<gst::FlowSuccess, gst::FlowError> {
-        let buffer = {
+    fn stream_error(&self, e: hush_core::Error) -> gst::FlowError {
+        gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
+        gst::FlowError::Error
+    }
+
+    /// End the current stream: flush the model, push what it still holds, and
+    /// get ready for a new stream. Used at EOS and on a DISCONT.
+    fn finish_stream(&self) -> Result<gst::FlowSuccess, gst::FlowError> {
+        let tail = {
             let mut guard = self.state.lock().unwrap();
             let Some(state) = guard.as_mut() else {
                 return Ok(gst::FlowSuccess::Ok);
             };
-
-            state.out.clear();
-            state.worker.finish(&mut state.out).map_err(|e| {
-                gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
-                gst::FlowError::Error
-            })?;
-            // finish() ends the stream; get ready for the next one.
-            state.worker.reset().map_err(|e| {
-                gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
-                gst::FlowError::Error
-            })?;
-            let pts = state.next_pts.take();
-
-            if state.out.is_empty() {
+            if !state.anchored {
                 return Ok(gst::FlowSuccess::Ok);
             }
-            let mut buffer = gst::Buffer::from_mut_slice(state.out.as_byte_slice().to_vec());
-            {
-                let buffer = buffer.get_mut().unwrap();
-                buffer.set_pts(pts);
-                buffer.set_duration(samples_to_time(state.out.len() as u64));
-            }
-            buffer
+            state.out.clear();
+            state
+                .worker
+                .finish(&mut state.out)
+                .map_err(|e| self.stream_error(e))?;
+            let tail = state.take_output();
+            gst::debug!(
+                CAT,
+                imp = self,
+                "Stream finished: {} samples in, {} out",
+                state.samples_in,
+                state.samples_out
+            );
+            state.reset().map_err(|e| self.stream_error(e))?;
+            tail
         };
 
-        gst::debug!(
-            CAT,
-            imp = self,
-            "Pushing {} tail bytes at EOS",
-            buffer.size()
-        );
-        self.obj().src_pad().push(buffer)
+        // Push without holding the state lock.
+        match tail {
+            Some(buffer) => self.obj().src_pad().push(buffer),
+            None => Ok(gst::FlowSuccess::Ok),
+        }
     }
 }
 
@@ -224,21 +276,25 @@ impl BaseTransformImpl for HushNoiseFilter {
 
         let db = self.settings.lock().unwrap().attn_lim_db;
         let settings = hush_core::Settings::new(db).map_err(|e| init_error(e.to_string()))?;
-        let worker = StreamWorker::spawn(bundle, settings, DelayMode::Live)
+        let worker = StreamWorker::spawn(bundle, settings, DelayMode::Aligned)
             .map_err(|e| init_error(e.to_string()))?;
 
         gst::debug!(
             CAT,
             imp = self,
-            "Started: hop {} samples, latency {} samples",
+            "Started: hop {} samples, model delay {} samples",
             worker.hop_size(),
-            worker.latency_samples()
+            worker.model_delay_samples()
         );
 
         *self.state.lock().unwrap() = Some(State {
             worker,
             out: Vec::new(),
-            next_pts: None,
+            anchored: false,
+            base_pts: None,
+            base_offset: None,
+            samples_in: 0,
+            samples_out: 0,
         });
         Ok(())
     }
@@ -249,62 +305,77 @@ impl BaseTransformImpl for HushNoiseFilter {
         Ok(())
     }
 
-    fn transform(
-        &self,
-        inbuf: &gst::Buffer,
-        outbuf: &mut gst::BufferRef,
-    ) -> Result<gst::FlowSuccess, gst::FlowError> {
+    fn generate_output(&self) -> Result<GenerateOutputSuccess, gst::FlowError> {
+        let Some(buffer) = self.take_queued_buffer() else {
+            return Ok(GenerateOutputSuccess::NoOutput);
+        };
+
+        // A gap or jump: end the current stream so the next one is
+        // timestamped from this buffer.
+        if buffer.flags().contains(gst::BufferFlags::DISCONT) {
+            self.finish_stream()?;
+        }
+
         let mut guard = self.state.lock().unwrap();
         let state = guard.as_mut().ok_or_else(|| {
             gst::element_imp_error!(self, gst::CoreError::Negotiation, ["Not started"]);
             gst::FlowError::NotNegotiated
         })?;
 
-        let in_map = inbuf.map_readable().map_err(|_| gst::FlowError::Error)?;
-        let input = in_map.as_slice_of::<f32>().map_err(|_| {
+        if !state.anchored {
+            state.anchored = true;
+            state.base_pts = buffer.pts();
+            state.base_offset =
+                Some(buffer.offset()).filter(|&o| o != gst::format::Buffers::OFFSET_NONE);
+            gst::debug!(CAT, imp = self, "New stream at {}", buffer.pts().display());
+        }
+
+        let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+        let input = map.as_slice_of::<f32>().map_err(|_| {
             gst::element_imp_error!(self, gst::CoreError::Failed, ["Unaligned input buffer"]);
             gst::FlowError::Error
         })?;
 
         state.out.clear();
-        state.worker.push(input, &mut state.out).map_err(|e| {
-            gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
-            gst::FlowError::Error
-        })?;
+        state
+            .worker
+            .push(input, &mut state.out)
+            .map_err(|e| self.stream_error(e))?;
+        state.samples_in += input.len() as u64;
 
-        let mut out_map = outbuf.map_writable().map_err(|_| gst::FlowError::Error)?;
-        let output = out_map.as_mut_slice_of::<f32>().map_err(|_| {
-            gst::element_imp_error!(self, gst::CoreError::Failed, ["Unaligned output buffer"]);
-            gst::FlowError::Error
-        })?;
-        // Live mode returns exactly as many samples as it was given.
-        output.copy_from_slice(&state.out);
-
-        if let Some(pts) = inbuf.pts() {
-            state.next_pts = Some(pts + samples_to_time(input.len() as u64));
-        }
-
-        Ok(gst::FlowSuccess::Ok)
+        Ok(match state.take_output() {
+            Some(out) => GenerateOutputSuccess::Buffer(out),
+            None => GenerateOutputSuccess::NoOutput,
+        })
     }
 
     fn sink_event(&self, event: gst::Event) -> bool {
         use gst::EventView;
 
         match event.view() {
-            EventView::Eos(_) => {
-                gst::debug!(CAT, imp = self, "Handling EOS");
-                if self.push_tail().is_err() {
+            // The model holds up to 320 samples. Push them before any event that
+            // ends the stream or changes the timeline, so they are not timestamped
+            // after it: EOS, a GAP (no data for a while), or a new SEGMENT without
+            // a flush (e.g. gapless playback). The first SEGMENT comes before any
+            // data, so there is nothing to push then.
+            EventView::Eos(_) | EventView::Gap(_) | EventView::Segment(_) => {
+                gst::debug!(
+                    CAT,
+                    imp = self,
+                    "Finishing stream before {:?}",
+                    event.type_()
+                );
+                if self.finish_stream().is_err() {
                     return false;
                 }
             }
             EventView::FlushStop(_) => {
-                // A flush (seek) starts a new stream.
-                if let Some(state) = self.state.lock().unwrap().as_mut() {
-                    state.next_pts = None;
-                    if let Err(e) = state.worker.reset() {
-                        gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
-                        return false;
-                    }
+                // A flush (seek) drops what the model holds and starts a new stream.
+                if let Some(state) = self.state.lock().unwrap().as_mut()
+                    && let Err(e) = state.reset()
+                {
+                    gst::element_imp_error!(self, gst::StreamError::Failed, ["{}", e]);
+                    return false;
                 }
             }
             _ => {}
@@ -316,8 +387,12 @@ impl BaseTransformImpl for HushNoiseFilter {
         if direction == gst::PadDirection::Src
             && let gst::QueryViewMut::Latency(q) = query.view_mut()
         {
+            // A sample can wait up to one hop for its frame to fill, then the
+            // model's own delay before it comes out.
             let ours = match self.state.lock().unwrap().as_ref() {
-                Some(state) => samples_to_time(state.worker.latency_samples() as u64),
+                Some(state) => samples_to_time(
+                    (state.worker.hop_size() + state.worker.model_delay_samples()) as u64,
+                ),
                 None => return BaseTransformImplExt::parent_query(self, direction, query),
             };
 

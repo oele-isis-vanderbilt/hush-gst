@@ -8,7 +8,7 @@ speech. It runs the same Hush model (DeepFilterNet, `advanced_dfnet16k`) as the
 |---|---|
 | Element | `hush` (class `Filter/Effect/Audio`) |
 | Caps | `audio/x-raw, format=F32LE, rate=16000, channels=1, layout=interleaved` |
-| Latency | 320 samples (20 ms), reported in the latency query |
+| Latency | up to 320 samples (20 ms), reported in the latency query |
 | Library | `libgsthush.so` / `libgsthush.dylib` / `gsthush.dll` |
 
 ## Requirements
@@ -92,17 +92,23 @@ let hush = gst::ElementFactory::make("hush").property("atten-lim-db", 20.0f32).b
 
 ### Timing
 
-- One output buffer per input buffer, same size and timestamps. Any buffer size works.
-- The audio inside is 320 samples (20 ms) late. Live pipelines compensate through
-  the latency query. File pipelines do not, so the output is 20 ms longer and
-  shifted by 20 ms. The `hush` CLI removes this shift for files; the element does not.
-- At EOS the element pushes the last 320 samples as one extra buffer.
-- A flush (seek) resets the model.
+- Output sample *n* is input sample *n*, with the same timestamp. Output is as
+  long as the input and lines up with it sample for sample, like the `hush` CLI.
+- Output leaves the element up to 320 samples (20 ms) after the matching input
+  arrived: the model needs a full 160-sample frame plus 160 samples of its own
+  delay. The latency query reports 20 ms, so live pipelines stay in sync.
+- Output buffers do not map 1:1 to input buffers; any input buffer size works.
+  Timestamps (and buffer offsets, if upstream sets them) are counted from the
+  first buffer of the stream.
+- Before EOS, a GAP event, a new SEGMENT, or a buffer flagged DISCONT, the element
+  pushes the audio the model still holds, so nothing comes out after an event that
+  ends the stream or changes the timeline. The next buffer starts a new stream,
+  timestamped from its own PTS. A flush (seek) drops what the model holds.
 
 ## Debugging
 
 ```sh
-GST_DEBUG=hush:5 gst-launch-1.0 ...               # element log: start, latency, EOS tail
+GST_DEBUG=hush:5 gst-launch-1.0 ...               # element log: start, new stream, samples in/out
 gst-inspect-1.0 target/release/libgsthush.dylib   # prints the load error if the plugin will not load
 rm -rf ~/.cache/gstreamer-1.0                     # stale plugin registry (Linux/macOS)
 ```
@@ -114,9 +120,11 @@ cargo test -p gst-plugin-hush --release
 cargo clippy -p gst-plugin-hush --all-targets --no-deps -- -D warnings
 ```
 
-The tests use `gst_check::Harness`. They check buffer sizes and timestamps, the
-EOS tail, the reported latency, the property, and that the output is
-bit-identical to `hush_core::StreamProcessor` in `DelayMode::Live`.
+The tests use `gst_check::Harness`. They check that timestamps and offsets follow
+the input (also across a DISCONT, GAP or new SEGMENT), that output length equals
+input length, the reported
+latency, the property, and that the output is bit-identical to
+`hush_core::StreamProcessor` in `DelayMode::Aligned`.
 
 ## License
 
