@@ -12,7 +12,24 @@ permissions:
   contents: write
 
 jobs:
+  # All crates share [workspace.package] version; the tag must match it.
+  check-version:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches workspace version
+        shell: bash
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+
   build:
+    needs: check-version
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:

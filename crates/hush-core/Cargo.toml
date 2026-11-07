@@ -1,7 +1,10 @@
 [package]
 name = "hush-core"
-version = "0.0.1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
 
 [dependencies]
 deep_filter = { version = "0.5.3", path = "../../third_party/deep_filter", features = ["tract", "transforms"] }

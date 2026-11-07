@@ -9,7 +9,8 @@ Notes for contributors and coding agents. Keep it short and factual.
   `StreamProcessor` (any chunk size; `DelayMode::Live` / `Aligned`),
   `StreamWorker` (a `StreamProcessor` on its own thread, `Send`).
 - `crates/hush-cli`: the `hush` binary. See `crates/hush-cli/README.md`.
-- `crates/hush-gst`, `crates/hush-mic-example`: GStreamer plugin and mic example.
+- `crates/gst-plugin-hush` (package `gst-plugin-hush`, lib `gsthush`): GStreamer plugin. 
+- `crates/hush-mic-example`: mic example.
 - `third_party/deep_filter`: vendored libDF. Don't change it without saying so
   in the commit message. Its warnings are not ours (clippy runs with `--no-deps`).
 - `models/advanced_dfnet16k`: model tar.gz + `manifest.json` (holds its SHA-256).
@@ -25,6 +26,14 @@ cargo test -p hush-core --release -- --ignored --nocapture   # golden diagnostic
 cargo clippy -p hush-core -p hush-cli --all-targets --no-deps -- -D warnings
 UPDATE_README=1 cargo test -p hush-cli readme      # after changing CLI flags or help text
 shellcheck install/install.sh
+
+# GStreamer plugin (needs GStreamer + pkg-config installed)
+cargo clippy -p gst-plugin-hush --all-targets --no-deps -- -D warnings
+cargo test -p gst-plugin-hush --release
+cargo build -p gst-plugin-hush --release
+GST_PLUGIN_PATH=$PWD/target/release gst-launch-1.0 filesrc location=in.wav ! wavparse \
+  ! audioconvert ! audioresample ! audio/x-raw,format=F32LE,rate=16000,channels=1 \
+  ! hush ! audioconvert ! wavenc ! filesink location=out.wav
 ```
 
 Debug builds of the model are slow; use `--release` for anything that runs audio.
@@ -38,6 +47,9 @@ Debug builds of the model are slow; use `--release` for anything that runs audio
 - Fixed runtime values (thresholds, channel count) live in
   `crates/hush-core/src/constants.rs`; they are not CLI options.
 - `CARGO_WORKSPACE_DIR` comes from `.cargo/config.toml`; tests and `include_bytes!` use it.
+- The `hush` element is mono 16 kHz F32, uses `DelayMode::Live` through a
+  `StreamWorker`, and reports 320 samples (20 ms) of latency; EOS pushes that tail.
+  Its `include_bytes!` uses `CARGO_MANIFEST_DIR` so git-dependency builds work.
 
 ## CLI rules
 
@@ -64,6 +76,8 @@ Debug builds of the model are slow; use `--release` for anything that runs audio
 
 ## Releases
 
-Push a tag `vX.Y.Z` → `.github/workflows/release.yml` builds five targets, uploads
-`hush-<target>.tar.gz|zip` + `.sha256` + both installers to the GitHub Release.
-Installers fetch from `releases/latest/download/`.
+All crates share one version (`[workspace.package]` in the root `Cargo.toml`) and
+are not published to crates.io. Bump it, commit, then push a matching tag `vX.Y.Z`
+(the release fails if they differ). `.github/workflows/release.yml` builds five
+targets, uploads `hush-<target>.tar.gz|zip` + `.sha256` + both installers to the
+GitHub Release. Installers fetch from `releases/latest/download/`.

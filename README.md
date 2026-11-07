@@ -8,7 +8,7 @@ This workspace holds:
 
 - **`hush`**, a command-line tool that denoises audio and video files in batches,
 - **`hush-core`**, the Rust library behind it (model loading, sessions, streaming),
-- **`hush-gst`**, a GStreamer plugin (in progress).
+- **`gst-plugin-hush`**, a GStreamer plugin (in progress).
 
 ## Install the `hush` CLI
 
@@ -182,7 +182,7 @@ The end-to-end tests in `crates/hush-cli/tests/` need `ffmpeg` and `ffprobe` on
 |---|---|
 | `crates/hush-core` | model bundle, `Session` (one stream), `StreamProcessor` / `StreamWorker` |
 | `crates/hush-cli` | the `hush` command ([details](crates/hush-cli/README.md)) |
-| `crates/hush-gst` | GStreamer plugin |
+| `crates/gst-plugin-hush` | GStreamer plugin |
 | `crates/hush-mic-example` | microphone example |
 | `third_party/deep_filter` | vendored DeepFilterNet runtime (libDF) |
 | `models/advanced_dfnet16k` | the model and its `manifest.json` (SHA-256), embedded into `hush` |

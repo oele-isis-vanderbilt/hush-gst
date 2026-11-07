@@ -20,13 +20,28 @@ pub fn fixture(name: &str) -> PathBuf {
 
 /// Read a mono, 16 kHz, 16-bit PCM WAV file. Panics on any other format.
 pub fn read_i16(path: &Path) -> Vec<i16> {
-    let mut reader = WavReader::open(path)
-        .unwrap_or_else(|e| panic!("cannot open {}: {e}", path.display()));
+    let mut reader =
+        WavReader::open(path).unwrap_or_else(|e| panic!("cannot open {}: {e}", path.display()));
     let spec = reader.spec();
     assert_eq!(spec.channels, 1, "{}: expected mono", path.display());
-    assert_eq!(spec.sample_rate, SAMPLE_RATE, "{}: expected 16 kHz", path.display());
-    assert_eq!(spec.bits_per_sample, 16, "{}: expected 16-bit", path.display());
-    assert_eq!(spec.sample_format, SampleFormat::Int, "{}: expected PCM int", path.display());
+    assert_eq!(
+        spec.sample_rate,
+        SAMPLE_RATE,
+        "{}: expected 16 kHz",
+        path.display()
+    );
+    assert_eq!(
+        spec.bits_per_sample,
+        16,
+        "{}: expected 16-bit",
+        path.display()
+    );
+    assert_eq!(
+        spec.sample_format,
+        SampleFormat::Int,
+        "{}: expected PCM int",
+        path.display()
+    );
     reader
         .samples::<i16>()
         .map(|s| s.expect("failed to read sample"))

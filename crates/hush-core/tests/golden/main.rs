@@ -158,12 +158,19 @@ mod test {
 
         let bundle = bundle();
         let ours = run(&bundle, DelayMode::Aligned, HOP, &to_f32(&raw));
-        assert_eq!(ours.len(), raw.len(), "Aligned output length != input length");
+        assert_eq!(
+            ours.len(),
+            raw.len(),
+            "Aligned output length != input length"
+        );
         assert!(ours.iter().all(|x| x.is_finite()), "non-finite output");
 
         let peak = ours.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         println!("\n=== golden diagnostic: {RAW} -> StreamProcessor(Aligned, chunk {HOP}) ===");
-        println!("  samples {} | our peak {peak:.4} (clips if > 1.0)", ours.len());
+        println!(
+            "  samples {} | our peak {peak:.4} (clips if > 1.0)",
+            ours.len()
+        );
 
         for (name, ours_i16) in [
             ("floor x32768", to_i16_floor(&ours)),
@@ -185,7 +192,9 @@ mod test {
         println!("\n  wrote {}", out.display());
 
         println!("\nHow to read this:");
-        println!("  best lag 0    -> golden is delay-compensated (offline / infer_single.py style)");
+        println!(
+            "  best lag 0    -> golden is delay-compensated (offline / infer_single.py style)"
+        );
         println!("  best lag +160 -> golden is raw frame-by-frame output (ctypes style)");
         println!("  diffs only in the last frames -> tail / flush handling");
         println!("  scattered large diffs -> LSNR gating or PyTorch vs tract");

@@ -1,0 +1,48 @@
+[package]
+name = "gst-plugin-hush"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+authors = ["Umesh Timalsina <umesh.timalsina@vanderbilt.edu>"]
+license = "MPL-2.0"
+description = "GStreamer plugin for Hush speech denoising"
+
+[lib]
+name = "gsthush"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+gst = { package = "gstreamer", version = "0.25.4" }
+gst-audio = { package = "gstreamer-audio", version = "0.25.4" }
+gst-base = { package = "gstreamer-base", version = "0.25.4" }
+hush-core.workspace = true
+byte-slice-cast = "1"
+serde_json = "1.0.154"
+
+[dev-dependencies]
+gst-check = { package = "gstreamer-check", version = "0.25.0" }
+
+[build-dependencies]
+gst-plugin-version-helper = "0.8.4"
+
+[features]
+static = []
+capi = []
+
+# cargo-c (`cargo cinstall`): install libgsthush into <prefix>/lib/gstreamer-1.0.
+[package.metadata.capi]
+min_version = "0.9.21"
+
+[package.metadata.capi.header]
+enabled = false
+
+[package.metadata.capi.library]
+install_subdir = "gstreamer-1.0"
+versioning = false
+import_library = false
+
+[package.metadata.capi.pkg_config]
+requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-audio-1.0, gobject-2.0, glib-2.0, gmodule-2.0"

@@ -4,3 +4,15 @@ members = [
     "crates/*",
     "third_party/deep_filter"
 ]
+default-members = ["crates/hush-core", "crates/hush-cli"]
+
+# One version for every crate. Bump it here before tagging a release.
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+repository = "https://github.com/oele-isis-vanderbilt/hush-gst"
+publish = false
+
+[workspace.dependencies]
+hush-core = { path = "crates/hush-core" }

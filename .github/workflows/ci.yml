@@ -33,6 +33,31 @@ jobs:
       - run: cargo clippy --locked -p hush-core -p hush-cli --all-targets --no-deps -- -D warnings
       - run: cargo test --locked --release -p hush-core -p hush-cli
 
+  # The GStreamer plugin needs GStreamer installed, so it has its own job.
+  plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GStreamer (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+      - name: Install GStreamer (macos)
+        if: runner.os == 'macOS'
+        run: brew install gstreamer
+      - run: cargo clippy --locked -p gst-plugin-hush --all-targets --no-deps -- -D warnings
+      - run: cargo test --locked --release -p gst-plugin-hush
+
   installers-lint:
     runs-on: ubuntu-latest
     steps:
